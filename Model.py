@@ -1,7 +1,8 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from Params import args
+#from Params import args
+from Conf import config
 import numpy as np
 import random
 import math
@@ -14,26 +15,26 @@ class Model(nn.Module):
 	def __init__(self, image_embedding, text_embedding, audio_embedding=None):
 		super(Model, self).__init__()
 
-		self.uEmbeds = nn.Parameter(init(torch.empty(args.user, args.latdim)))
-		self.iEmbeds = nn.Parameter(init(torch.empty(args.item, args.latdim)))
-		self.gcnLayers = nn.Sequential(*[GCNLayer() for i in range(args.gnn_layer)])
+		self.uEmbeds = nn.Parameter(init(torch.empty(config.data.user_num, config.base.latdim)))
+		self.iEmbeds = nn.Parameter(init(torch.empty(config.data.item_num, config.base.latdim)))
+		self.gcnLayers = nn.Sequential(*[GCNLayer() for i in range(config.train.gnn_layer)])
 
-		self.edgeDropper = SpAdjDropEdge(args.keepRate)
+		self.edgeDropper = SpAdjDropEdge(config.hyper.keepRate)
 
-		if args.trans == 1:
-			self.image_trans = nn.Linear(args.image_feat_dim, args.latdim)
-			self.text_trans = nn.Linear(args.text_feat_dim, args.latdim)
-		elif args.trans == 0:
-			self.image_trans = nn.Parameter(init(torch.empty(size=(args.image_feat_dim, args.latdim))))
-			self.text_trans = nn.Parameter(init(torch.empty(size=(args.text_feat_dim, args.latdim))))
+		if config.base.trans == 1:
+			self.image_trans = nn.Linear(config.data.image_feat_dim, config.base.latdim)
+			self.text_trans = nn.Linear(config.data.text_feat_dim, config.base.latdim)
+		elif config.base.trans == 0:
+			self.image_trans = nn.Parameter(init(torch.empty(size=(config.data.image_feat_dim, config.base.latdim))))
+			self.text_trans = nn.Parameter(init(torch.empty(size=(config.data.text_feat_dim, config.base.latdim))))
 		else:
-			self.image_trans = nn.Parameter(init(torch.empty(size=(args.image_feat_dim, args.latdim))))
-			self.text_trans = nn.Linear(args.text_feat_dim, args.latdim)
+			self.image_trans = nn.Parameter(init(torch.empty(size=(config.data.image_feat_dim, config.base.latdim))))
+			self.text_trans = nn.Linear(config.data.text_feat_dim, config.base.latdim)
 		if audio_embedding != None:
-			if args.trans == 1:
-				self.audio_trans = nn.Linear(args.audio_feat_dim, args.latdim)
+			if config.base.trans == 1:
+				self.audio_trans = nn.Linear(config.data.audio_feat_dim, config.base.latdim)
 			else:
-				self.audio_trans = nn.Parameter(init(torch.empty(size=(args.audio_feat_dim, args.latdim))))
+				self.audio_trans = nn.Parameter(init(torch.empty(size=(config.data.audio_feat_dim, config.base.latdim))))
 
 		self.image_embedding = image_embedding
 		self.text_embedding = text_embedding
@@ -59,14 +60,14 @@ class Model(nn.Module):
 		return self.uEmbeds
 	
 	def getImageFeats(self):
-		if args.trans == 0 or args.trans == 2:
+		if config.base.trans == 0 or config.base.trans == 2:
 			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_trans))
 			return image_feats
 		else:
 			return self.image_trans(self.image_embedding)
 	
 	def getTextFeats(self):
-		if args.trans == 0:
+		if config.base.trans == 0:
 			text_feats = self.leakyrelu(torch.mm(self.text_embedding, self.text_trans))
 			return text_feats
 		else:
@@ -76,17 +77,17 @@ class Model(nn.Module):
 		if self.audio_embedding == None:
 			return None
 		else:
-			if args.trans == 0:
+			if config.base.trans == 0:
 				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_trans))
 			else:
 				audio_feats = self.audio_trans(self.audio_embedding)
 		return audio_feats
 
 	def forward_MM(self, adj, image_adj, text_adj, audio_adj=None):
-		if args.trans == 0:
+		if config.base.trans == 0:
 			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_trans))
 			text_feats = self.leakyrelu(torch.mm(self.text_embedding, self.text_trans))
-		elif args.trans == 1:
+		elif config.base.trans == 1:
 			image_feats = self.image_trans(self.image_embedding)
 			text_feats = self.text_trans(self.text_embedding)
 		else:
@@ -94,7 +95,7 @@ class Model(nn.Module):
 			text_feats = self.text_trans(self.text_embedding)
 
 		if audio_adj != None:
-			if args.trans == 0:
+			if config.base.trans == 0:
 				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_trans))
 			else:
 				audio_feats = self.audio_trans(self.audio_embedding)
@@ -107,7 +108,7 @@ class Model(nn.Module):
 		embedsImage = torch.concat([self.uEmbeds, F.normalize(image_feats)])
 		embedsImage = torch.spmm(adj, embedsImage)
 
-		embedsImage_ = torch.concat([embedsImage[:args.user], self.iEmbeds])
+		embedsImage_ = torch.concat([embedsImage[:config.data.user_num], self.iEmbeds])
 		embedsImage_ = torch.spmm(adj, embedsImage_)
 		embedsImage += embedsImage_
 		
@@ -117,7 +118,7 @@ class Model(nn.Module):
 		embedsText = torch.concat([self.uEmbeds, F.normalize(text_feats)])
 		embedsText = torch.spmm(adj, embedsText)
 
-		embedsText_ = torch.concat([embedsText[:args.user], self.iEmbeds])
+		embedsText_ = torch.concat([embedsText[:config.data.user_num], self.iEmbeds])
 		embedsText_ = torch.spmm(adj, embedsText_)
 		embedsText += embedsText_
 
@@ -128,14 +129,14 @@ class Model(nn.Module):
 			embedsAudio = torch.concat([self.uEmbeds, F.normalize(audio_feats)])
 			embedsAudio = torch.spmm(adj, embedsAudio)
 
-			embedsAudio_ = torch.concat([embedsAudio[:args.user], self.iEmbeds])
+			embedsAudio_ = torch.concat([embedsAudio[:config.data.user_num], self.iEmbeds])
 			embedsAudio_ = torch.spmm(adj, embedsAudio_)
 			embedsAudio += embedsAudio_
 
-		embedsImage += args.ris_adj_lambda * embedsImageAdj
-		embedsText += args.ris_adj_lambda * embedsTextAdj
+		embedsImage += config.hyper.ris_adj_lambda * embedsImageAdj
+		embedsText += config.hyper.ris_adj_lambda * embedsTextAdj
 		if audio_adj != None:
-			embedsAudio += args.ris_adj_lambda * embedsAudioAdj
+			embedsAudio += config.hyper.ris_adj_lambda * embedsAudioAdj
 		if audio_adj == None:
 			embedsModal = weight[0] * embedsImage + weight[1] * embedsText
 		else:
@@ -148,15 +149,15 @@ class Model(nn.Module):
 			embedsLst.append(embeds)
 		embeds = sum(embedsLst)
 
-		embeds = embeds + args.ris_lambda * F.normalize(embedsModal)
+		embeds = embeds + config.hyper.ris_lambda * F.normalize(embedsModal)
 
-		return embeds[:args.user], embeds[args.user:]
+		return embeds[:config.data.user_num], embeds[config.data.user_num:]
 
 	def forward_cl_MM(self, adj, image_adj, text_adj, audio_adj=None):
-		if args.trans == 0:
+		if config.base.trans == 0:
 			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_trans))
 			text_feats = self.leakyrelu(torch.mm(self.text_embedding, self.text_trans))
-		elif args.trans == 1:
+		elif config.base.trans == 1:
 			image_feats = self.image_trans(self.image_embedding)
 			text_feats = self.text_trans(self.text_embedding)
 		else:
@@ -164,7 +165,7 @@ class Model(nn.Module):
 			text_feats = self.text_trans(self.text_embedding)
 
 		if audio_adj != None:
-			if args.trans == 0:
+			if config.base.trans == 0:
 				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_trans))
 			else:
 				audio_feats = self.audio_trans(self.audio_embedding)
@@ -202,9 +203,9 @@ class Model(nn.Module):
 			embeds3 = sum(embedsLst3)
 
 		if audio_adj == None:
-			return embeds1[:args.user], embeds1[args.user:], embeds2[:args.user], embeds2[args.user:]
+			return embeds1[:config.data.user_num], embeds1[config.data.user_num:], embeds2[:config.data.user_num], embeds2[config.data.user_num:]
 		else:
-			return embeds1[:args.user], embeds1[args.user:], embeds2[:args.user], embeds2[args.user:], embeds3[:args.user], embeds3[args.user:]
+			return embeds1[:config.data.user_num], embeds1[config.data.user_num:], embeds2[:config.data.user_num], embeds2[config.data.user_num:], embeds3[:config.data.user_num], embeds3[config.data.user_num:]
 
 	def reg_loss(self):
 		ret = 0
@@ -233,7 +234,7 @@ class SpAdjDropEdge(nn.Module):
 		newVals = vals[mask] / self.keepRate
 		newIdxs = idxs[:, mask]
 
-		return torch.sparse.FloatTensor(newIdxs, newVals, adj.shape)
+		return torch.sparse_coo_tensor(newIdxs, newVals, adj.shape)
 		
 class Denoise(nn.Module):
 	def __init__(self, in_dims, out_dims, emb_size, norm=False, dropout=0.5):

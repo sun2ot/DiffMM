@@ -1,0 +1,79 @@
+from dataclasses import dataclass
+from typing import Optional
+import toml
+
+"""
+*The configurations in the @dataclass are initialized with default values.
+*The `load_config` function loads a TOML configuration file and updates the dataclass instances with the values from the file.
+"""
+
+@dataclass
+class BaseConfig:
+    latdim: int = 64
+    topk: int = 20
+    gpu: str = "0"
+    seed: int = 421
+    dims: str = "[1000]"
+    d_emb_size: int = 10
+    trans: int = 0
+    cl_method: int = 0
+
+@dataclass
+class DataConfig:
+    name: str = "tiktok"
+    # The following configurations will be updated in `DataHandler/LoadData()`
+    user_num: int = 0
+    item_num: int = 0
+    image_feat_dim: int = 0
+    text_feat_dim: int = 0
+    audio_feat_dim: int = 0
+
+@dataclass
+class HyperConfig:
+    temp: float = 0.5
+    ssl_reg: float = 0.01
+    keepRate: float = 0.5
+    noise_scale: float = 0.1
+    noise_min: float = 0.0001
+    noise_max: float = 0.02
+
+    e_loss: float = 0.1
+    ris_lambda: float = 0.5
+    ris_adj_lambda: float = 0.2
+
+    steps: int = 5
+    sampling_steps: int = 0
+    rebuild_k: int = 1
+
+@dataclass
+class TrainConfig:
+    lr: float = 0.001
+    batch: int = 1024
+    tstBat: int = 256
+    reg: float = 1e-5
+    epoch: int = 50
+    tstEpoch: int = 1
+    gnn_layer: int = 1
+    norm: bool = False
+    sampling_noise: bool = False
+
+@dataclass
+class Config:
+    base: BaseConfig = BaseConfig()
+    data: DataConfig = DataConfig()
+    hyper: HyperConfig = HyperConfig()
+    train: TrainConfig = TrainConfig()
+
+
+def load_config(path: str) -> Config:
+    with open(path, 'r') as file:
+        raw_config = toml.load(file)
+    return Config(
+        base = BaseConfig(**raw_config.get("base", {})),
+        data = DataConfig(**raw_config.get("data", {})),
+        hyper = HyperConfig(**raw_config.get("hyper", {})),
+        train = TrainConfig(**raw_config.get("train", {})),
+    )
+
+config = load_config('conf/test.toml')
+print("Load configuration file successfully👌")

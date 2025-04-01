@@ -2,7 +2,8 @@ import pickle
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse import coo_matrix, csr_matrix
-from Params import args
+#from Params import args
+from Conf import config
 import torch
 from torch.utils.data import Dataset as torch_dataset
 import torch.utils.data as dataloader
@@ -11,7 +12,7 @@ from tqdm import tqdm
 import random
 from typing import Optional
 
-device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
+device = torch.device(f"cuda:{config.base.gpu}" if torch.cuda.is_available() else "cpu")
 
 class DataHandler:
 	def __init__(self):
@@ -19,14 +20,14 @@ class DataHandler:
 		Initialize dataset's path based on the dataset name from `args.data`.
 		"""
 		# path to datasets
-		if args.data == 'baby':
+		if config.data.name == 'baby':
 			predir = './Datasets/baby/'
-		elif args.data == 'sports':
+		elif config.data.name == 'sports':
 			predir = './Datasets/sports/'
-		elif args.data == 'tiktok':
+		elif config.data.name == 'tiktok':
 			predir = './Datasets/tiktok/'
 		else:
-			raise ValueError(f"Unknown dataset: {args.data}")
+			raise ValueError(f"Unknown dataset: {config.data.name}")
 
 		#* all datasets' file names are the same
 		self.predir = predir
@@ -37,7 +38,7 @@ class DataHandler:
 		self.imagefile = predir + 'image_feat.npy'
 		self.textfile = predir + 'text_feat.npy'
 
-		if args.data == 'tiktok':  # only tiktok has audio features
+		if config.data.name == 'tiktok':  # only tiktok has audio features
 			self.audiofile = predir + 'audio_feat.npy'
 		
 		#* other delayed initialization are in `LoadData()`
@@ -79,8 +80,8 @@ class DataHandler:
 			out (torch.sparse_coo_tensor): (node_num, node_num)
 		"""
 		#* build a sparse bipartite adjacency matrix and normalize it
-		a = csr_matrix((args.user, args.user))
-		b = csr_matrix((args.item, args.item))
+		a = csr_matrix((config.data.user_num, config.data.user_num))
+		b = csr_matrix((config.data.item_num, config.data.item_num))
 		mat = sp.vstack([sp.hstack([a, mat]), sp.hstack([mat.transpose(), b])]).tocoo() # (node_num, node_num), node_num = user_num + item_num
 		mat = (mat != 0) * 1.0 # convert to binary matrix (data is float) #? why do it? u-i interactions are scores?
 		mat = (mat + sp.eye(mat.shape[0])) * 1.0  # set diagonal to 1 (self connection)
@@ -111,21 +112,22 @@ class DataHandler:
 		trainMat = self.loadOneFile(self.trainfile)
 		testMat = self.loadOneFile(self.testfile)
 		self.trainMat = trainMat
-		args.user, args.item = trainMat.shape  # (user_num, item_num)
+		#args.user, args.item = trainMat.shape  # (user_num, item_num)
+		config.data.user_num, config.data.item_num = trainMat.shape  # (user_num, item_num)
 		self.torchBiAdj = self.makeTorchAdj(trainMat) # (node_num, node_num)
 
 		self.trainData = TrainData(trainMat)
-		self.trainLoader = dataloader.DataLoader(self.trainData, batch_size=args.batch, shuffle=True, num_workers=0)
+		self.trainLoader = dataloader.DataLoader(self.trainData, batch_size=config.train.batch, shuffle=True, num_workers=0)
 		self.testData = TestData(testMat, trainMat)
-		self.testLoader = dataloader.DataLoader(self.testData, batch_size=args.tstBat, shuffle=False, num_workers=0)
+		self.testLoader = dataloader.DataLoader(self.testData, batch_size=config.train.tstBat, shuffle=False, num_workers=0)
 
-		self.image_feats, args.image_feat_dim = self.loadFeatures(self.imagefile)
-		self.text_feats, args.text_feat_dim = self.loadFeatures(self.textfile)
-		if args.data == 'tiktok':
-			self.audio_feats, args.audio_feat_dim = self.loadFeatures(self.audiofile)
+		self.image_feats, config.data.image_feat_dim = self.loadFeatures(self.imagefile)
+		self.text_feats, config.data.text_feat_dim = self.loadFeatures(self.textfile)
+		if config.data.name == 'tiktok':
+			self.audio_feats, config.data.audio_feat_dim = self.loadFeatures(self.audiofile)
 
 		self.diffusionData = DiffusionData(torch.tensor(self.trainMat.A, dtype=torch.float)) # .A == .toarray() #todo: check this tensor's device
-		self.diffusionLoader = dataloader.DataLoader(self.diffusionData, batch_size=args.batch, shuffle=True, num_workers=0)
+		self.diffusionLoader = dataloader.DataLoader(self.diffusionData, batch_size=config.train.batch, shuffle=True, num_workers=0)
 
 class TrainData(torch_dataset):
 	"""Train Dataset (with negative sampling func)"""
@@ -140,7 +142,7 @@ class TrainData(torch_dataset):
 		for i in range(len(self.rows)):
 			u = self.rows[i]
 			while True:
-				neg_index = np.random.randint(args.item)
+				neg_index = np.random.randint(config.data.item_num)
 				#* choose non-interacted items as negative samples
 				#todo: use the top -k in re-constructed u-i matrix after diffusion as negative samples
 				if (u, neg_index) not in self.dokmat:

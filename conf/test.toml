@@ -1,0 +1,50 @@
+[base]
+latdim = 64 # Embedding size
+topk = 20
+gpu = "0"
+seed = 421 # Random seed
+dims = "[1000]" # Dimensions (str)
+d_emb_size = 10 # Embedding size for discriminator
+
+# Transformation type: 0 = R*R, 1 = Linear, 2 = allrecipes
+trans = 0
+
+# Contrastive learning method: 0 = m vs m, 1 = m vs main
+cl_method = 0
+
+# ------------------------------------------------------------
+
+[data]
+name = "tiktok" # Dataset name
+
+# ------------------------------------------------------------
+
+[hyper] # Hyperparameters for the model
+temp = 0.5 # Temperature in contrastive learning
+ssl_reg = 0.01 # Weight for contrastive learning
+keepRate = 0.5 # Ratio of edges to keep
+
+noise_scale = 0.1 # Noise scale
+noise_min = 0.0001 # Minimum noise
+noise_max = 0.02 # Maximum noise
+
+e_loss = 0.1 # Edge loss
+ris_lambda = 0.5  # RIS lambda
+ris_adj_lambda = 0.2 # RIS adjacency lambda
+
+steps = 5 # Number of steps
+sampling_steps = 0 # Number of sampling steps
+rebuild_k = 1 # Rebuild k
+
+# ------------------------------------------------------------
+
+[train]
+lr = 0.001 # Learning rate
+batch = 1024 # Batch size
+tstBat = 256 # Number of users in a testing batch
+reg = 1e-5 # Weight decay regularizer
+epoch = 50 # Number of epochs
+tstEpoch = 1 # Number of epochs to test while training
+gnn_layer = 1 # Number of GNN layers
+norm = false # Whether to apply normalization
+sampling_noise = false # Whether to use sampling noise
