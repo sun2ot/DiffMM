@@ -11,6 +11,8 @@ from tqdm import tqdm
 import random
 from typing import Optional
 
+device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
+
 class DataHandler:
 	def __init__(self):
 		"""
@@ -29,8 +31,8 @@ class DataHandler:
 		#* all datasets' file names are the same
 		self.predir = predir
 		#? train and test
-		self.trnfile = predir + 'trnMat_new.pkl'
-		self.tstfile = predir + 'tstMat_new.pkl'
+		self.trainfile = predir + 'trnMat_new.pkl'
+		self.testfile = predir + 'tstMat_new.pkl'
 
 		self.imagefile = predir + 'image_feat.npy'
 		self.textfile = predir + 'text_feat.npy'
@@ -38,9 +40,7 @@ class DataHandler:
 		if args.data == 'tiktok':  # only tiktok has audio features
 			self.audiofile = predir + 'audio_feat.npy'
 		
-		#* delayed initialization
-		self.trainMat: Optional[coo_matrix] = None
-		self.torchBiAdj: Optional[torch.Tensor] = None
+		#* other delayed initialization are in `LoadData()`
 
 	def loadOneFile(self, filename):
 		"""
@@ -90,19 +90,26 @@ class DataHandler:
 		idxs = torch.from_numpy(np.vstack([mat.row, mat.col]).astype(np.int64))
 		vals = torch.from_numpy(mat.data.astype(np.float32))
 		shape = torch.Size(mat.shape)
-		#todo: specify the tensor device
-		return torch.sparse_coo_tensor(idxs, vals, shape).cuda()  # torch.Size([node_num, node_num])
+		return torch.sparse_coo_tensor(idxs, vals, shape, device=device)  # torch.Size([node_num, node_num])
 
 	def loadFeatures(self, filename):
-		feats = np.load(filename)
-		return torch.tensor(feats).float().cuda(), np.shape(feats)[1]
+		"""
+		Load multi-modal features from .npy file and convert to torch tensor.
+		
+		Returns:
+			tuple:
+				- feats (torch.Tensor): (node_num, feat_dim)
+				- feat_dim (int)
+		"""
+		feats: np.ndarray = np.load(filename)
+		return torch.tensor(feats, dtype=torch.float, device=device), feats.shape[1]
 
 	def LoadData(self):
 		"""
 		Load training and testing data, and features.
 		"""
-		trainMat = self.loadOneFile(self.trnfile)
-		testMat = self.loadOneFile(self.tstfile)
+		trainMat = self.loadOneFile(self.trainfile)
+		testMat = self.loadOneFile(self.testfile)
 		self.trainMat = trainMat
 		args.user, args.item = trainMat.shape  # (user_num, item_num)
 		self.torchBiAdj = self.makeTorchAdj(trainMat) # (node_num, node_num)
@@ -117,7 +124,7 @@ class DataHandler:
 		if args.data == 'tiktok':
 			self.audio_feats, args.audio_feat_dim = self.loadFeatures(self.audiofile)
 
-		self.diffusionData = DiffusionData(torch.FloatTensor(self.trainMat.A))
+		self.diffusionData = DiffusionData(torch.tensor(self.trainMat.A, dtype=torch.float)) # .A == .toarray() #todo: check this tensor's device
 		self.diffusionLoader = dataloader.DataLoader(self.diffusionData, batch_size=args.batch, shuffle=True, num_workers=0)
 
 class TrainData(torch_dataset):
@@ -149,7 +156,7 @@ class TrainData(torch_dataset):
 		return self.rows[idx], self.cols[idx], self.negs[idx]
 
 class TestData(torch_dataset):
-	def __init__(self, testMat, trainMat):
+	def __init__(self, testMat: coo_matrix, trainMat: coo_matrix):
 		"""
 		Test Dateset
 
@@ -157,7 +164,7 @@ class TestData(torch_dataset):
 			testMat (coo_matrix): (user_num, item_num)
 			trainMat (coo_matrix): (user_num, item_num)
 		"""
-		self.csrmat = (trainMat.tocsr() != 0) * 1.0 # convert to binary matrix
+		self.trainMat_csr: csr_matrix = (trainMat.tocsr() != 0) * 1.0 # convert to binary matrix
 
 		test_use_its: list = [None] * testMat.shape[0] # users' interactions in test set
 		test_users = set()
@@ -177,13 +184,20 @@ class TestData(torch_dataset):
 		return len(self.test_users)
 
 	def __getitem__(self, idx):
-		return self.test_users[idx], np.reshape(self.csrmat[self.test_users[idx]].toarray(), [-1])
+		"""get user's its in train set and flatten it"""
+		return self.test_users[idx], np.reshape(self.trainMat_csr[self.test_users[idx]].toarray(), [-1])
 	
 class DiffusionData(torch_dataset):
-	def __init__(self, data):
-		self.data = data
+	def __init__(self, data: torch.Tensor):
+		self.data = data  # (user_num, item_num)
 
 	def __getitem__(self, index):
+		"""
+		Returns:
+			tuple:
+				- item (torch.Tensor)
+				- index (int)
+		"""
 		item = self.data[index]
 		return item, index
 	
