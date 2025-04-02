@@ -1,8 +1,7 @@
 import torch
 from torch.optim.adam import Adam
 import Utils.TimeLogger as logger
-from Utils.TimeLogger import log
-#from Params import args
+from Utils.Log import main_log, olog
 from Conf import config
 from Model import Model, GaussianDiffusion, Denoise
 from DataHandler import DataHandler
@@ -20,8 +19,8 @@ class Coach:
 	def __init__(self, handler: DataHandler):
 		self.handler = handler
 		
-		print('USER', config.data.user_num, 'ITEM', config.data.item_num)
-		print('NUM OF INTERACTIONS', self.handler.trainData.__len__())
+		main_log.info(f"USER: {config.data.user_num}, ITEM: {config.data.item_num}")
+		main_log.info(f"NUM OF INTERACTIONS: {self.handler.trainData.__len__()}")
 
 		# init metrics dict: train/test
 		self.metrics = dict()
@@ -43,19 +42,19 @@ class Coach:
 
 	def run(self):
 		self.prepareModel()
-		log('Model Prepared')
+		main_log.info('Model Prepared')
 
 		recallMax = 0
 		ndcgMax = 0
 		precisionMax = 0
 		bestEpoch = 0
 
-		log('Model Initialized')
+		main_log.info('Model Initialized')
 
 		for ep in range(0, config.train.epoch):
 			tstFlag = (ep % config.train.tstEpoch == 0)
 			reses = self.trainEpoch()
-			log(self.makePrint('Train', ep, reses, tstFlag))
+			olog(self.makePrint('Train', ep, reses, tstFlag))
 			if tstFlag:
 				reses = self.testEpoch()
 				if (reses['Recall'] > recallMax):
@@ -63,7 +62,8 @@ class Coach:
 					ndcgMax = reses['NDCG']
 					precisionMax = reses['Precision']
 					bestEpoch = ep
-				log(self.makePrint('Test', ep, reses, tstFlag))
+				print()
+				main_log.info(self.makePrint('Test', ep, reses, tstFlag))
 			print()
 		print('Best epoch : ', bestEpoch, ' , Recall : ', recallMax, ' , NDCG : ', ndcgMax, ' , Precision', precisionMax)
 
@@ -172,10 +172,10 @@ class Coach:
 			if config.data.name == 'tiktok':
 				self.denoise_opt_audio.step()
 
-			log('Diffusion Step %d/%d' % (i, diffusionLoader.dataset.__len__() // config.train.batch), save=False, oneline=True)
+			olog(f"Diffusion Step {i}/{diffusionLoader.dataset.__len__() // config.train.batch}")
 
-		log('')
-		log('Start to re-build UI matrix')
+		print()
+		main_log.info('Start to re-build UI matrix')
 
 		with torch.no_grad():
 
@@ -249,7 +249,7 @@ class Coach:
 				self.audio_UI_matrix = self.buildUIMatrix(u_list_audio, i_list_audio, edge_list_audio)
 				self.audio_UI_matrix = self.model.edgeDropper(self.audio_UI_matrix)
 
-		log('UI matrix built!')
+		main_log.info('UI matrix built!')
 
 		for i, tem in enumerate(trnLoader):
 			ancs, poss, negs = tem
@@ -303,13 +303,8 @@ class Coach:
 			loss.backward()
 			self.opt.step()
 
-			log('Step %d/%d: bpr : %.3f ; reg : %.3f ; cl : %.3f ' % (
-				i, 
-				steps,
-				bprLoss.item(),
-        regLoss.item(),
-				clLoss.item()
-				), save=False, oneline=True)
+			olog(f"Step {i}/{steps}: bpr : {bprLoss.item():.3f} ; reg : {regLoss.item():.3f} ; cl : {clLoss.item():.3f}")
+		print()
 
 		ret = dict()
 		ret['Loss'] = epLoss / steps
@@ -344,7 +339,7 @@ class Coach:
 			epRecall += recall
 			epNdcg += ndcg
 			epPrecision += precision
-			log('Steps %d/%d: recall = %.2f, ndcg = %.2f , precision = %.2f   ' % (i, steps, recall, ndcg, precision), save=False, oneline=True)
+			olog(f"Step {i}/{steps}: recall = {recall:.2f}, ndcg = {ndcg:.2f} , precision = {precision:.2f}")
 		ret = dict()
 		ret['Recall'] = epRecall / num
 		ret['NDCG'] = epNdcg / num
@@ -394,10 +389,10 @@ if __name__ == '__main__':
 
 	logger.saveDefault = True  #todo: reconstruct log module
 	
-	log('Start')
+	main_log.info('Start')
 	data_handler = DataHandler()
 	data_handler.LoadData()
-	log('Load Data')
+	main_log.info('Load Data')
 
 	coach = Coach(data_handler)
 	coach.run()
