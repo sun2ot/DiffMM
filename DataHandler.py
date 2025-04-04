@@ -49,7 +49,8 @@ class DataHandler:
 			ret = coo_matrix(ret)
 		return ret
 
-	def normalizeAdj(self, mat: coo_matrix): 
+	@staticmethod
+	def normalizeAdj(mat: coo_matrix): 
 		"""
 		Normalize a sparse adjacency matrix using the symmetric normalization method D^(-1/2) * A * D^(-1/2).
 
@@ -64,7 +65,8 @@ class DataHandler:
 		normalized_mat: csr_matrix = dInvSqrtMat @ mat @ dInvSqrtMat
 		return normalized_mat.tocoo()
 
-	def makeTorchAdj(self, mat: coo_matrix):
+	@staticmethod
+	def makeTorchAdj(mat: coo_matrix):
 		"""
 		Construct a sparse bipartite adjacency matrix and convert to torch sparse tensor.
 
@@ -80,7 +82,7 @@ class DataHandler:
 		mat = sp.vstack([sp.hstack([a, mat]), sp.hstack([mat.transpose(), b])]).tocoo() # (node_num, node_num), node_num = user_num + item_num
 		mat = (mat != 0) * 1.0 # convert to binary matrix (data is float) #? why do it? u-i interactions are scores?
 		mat = (mat + sp.eye(mat.shape[0])) * 1.0  # set diagonal to 1 (self connection)
-		mat = self.normalizeAdj(mat)
+		mat = DataHandler.normalizeAdj(mat)
 
 		#* make cuda tensor
 		idxs = torch.from_numpy(np.vstack([mat.row, mat.col]).astype(np.int64))
@@ -121,7 +123,7 @@ class DataHandler:
 		if config.data.name == 'tiktok':
 			self.audio_feats, config.data.audio_feat_dim = self.loadFeatures(self.audiofile)
 
-		self.diffusionData = DiffusionData(torch.tensor(self.trainMat.A, dtype=torch.float)) # .A == .toarray() #todo: check this tensor's device
+		self.diffusionData = DiffusionData(torch.tensor(self.trainMat.A, dtype=torch.float, device=device)) # .A == .toarray()
 		self.diffusionLoader = dataloader.DataLoader(self.diffusionData, batch_size=config.train.batch, shuffle=True, num_workers=0)
 
 class TrainData(torch_dataset):
@@ -134,6 +136,7 @@ class TrainData(torch_dataset):
 		self.negs = np.zeros(len(self.rows)).astype(np.int32) # neg_num == len(self.rows) == interactions (for CL)
 
 	def negSampling(self):
+		"""select negative samples for each interaction"""
 		for i in range(len(self.rows)):
 			u = self.rows[i]
 			while True:
@@ -185,6 +188,7 @@ class TestData(torch_dataset):
 		return self.test_users[idx], np.reshape(self.trainMat_csr[self.test_users[idx]].toarray(), [-1])
 	
 class DiffusionData(torch_dataset):
+	"""convert trainMat to torch tensor"""
 	def __init__(self, data: torch.Tensor):
 		self.data = data  # (user_num, item_num)
 
@@ -193,10 +197,10 @@ class DiffusionData(torch_dataset):
 		Returns:
 			tuple:
 				- item (torch.Tensor)
-				- index (int)
+				- index (torch.Tensor)
 		"""
 		item = self.data[index]
-		return item, index
+		return item, torch.tensor(index, dtype=torch.long, device=device)
 	
 	def __len__(self):
 		return len(self.data)
