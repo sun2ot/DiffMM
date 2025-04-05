@@ -12,7 +12,7 @@ class BaseConfig:
     topk: int = 20
     gpu: str = "0"
     seed: int = 421
-    dims: str = "[1000]"
+    denoise_dim: str = "[1000]"
     d_emb_size: int = 10
     trans: int = 0
     cl_method: int = 0

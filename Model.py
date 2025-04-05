@@ -282,7 +282,7 @@ class SpAdjDropEdge(nn.Module):
 		return torch.sparse_coo_tensor(newIdxs, newVals, adj.shape)
 		
 class Denoise(nn.Module):
-	def __init__(self, in_dims, out_dims, emb_size, norm=False, dropout=0.5):
+	def __init__(self, in_dims: list[int], out_dims: list[int], emb_size: int, norm=False, dropout=0.5):
 		"""
 		Denoiser class for the diffusion model.
 
@@ -325,7 +325,7 @@ class Denoise(nn.Module):
 		nn.init.xavier_normal_(self.emb_layer.weight)
 		nn.init.normal_(self.emb_layer.bias, mean=0.0, std=0.001)
 
-	def forward(self, x: torch.Tensor, timesteps: torch.Tensor, mess_dropout=True) -> torch.Tensor:
+	def forward(self, x_t: torch.Tensor, timesteps: torch.Tensor, mess_dropout=True) -> torch.Tensor:
 		"""
 		Denoise Layer
 
@@ -346,11 +346,11 @@ class Denoise(nn.Module):
 		emb = self.emb_layer(time_emb)  # (batch, 10)
 
 		if self.norm:
-			x = F.normalize(x)
+			x_t = F.normalize(x_t)
 		if mess_dropout:
-			x = self.drop(x)
+			x_t = self.drop(x_t)
 		
-		h = torch.cat([x, emb], dim=-1)  # (batch, item_num+10)
+		h = torch.cat([x_t, emb], dim=-1)  # (batch, item_num+10)
 		for i, layer in enumerate(self.in_layers):
 			h = layer(h)
 			h = torch.tanh(h)  #? how about other activation functions?
@@ -437,36 +437,37 @@ class GaussianDiffusion(nn.Module):
 		self.posterior_mean_coef1 = 1.0 / torch.sqrt(alphas)  # 1 / sqrt(α)
 		self.posterior_mean_coef2 = (1.0 - alphas) / (torch.sqrt(1.0 - self.alphas_cumprod))  # (1 - α) / sqrt(1 - \bar{α})
 
-	def p_sample(self, model: Denoise, x_start: torch.Tensor, sampling_steps: int, sampling_noise=False):
+	def backward_steps(self, model: Denoise, x_start: torch.Tensor, sampling_steps: int, sampling_noise=False):
 		"""
-		inverse diffusion process (sampling for x_{t-1})
+		Implement inverse diffusion process (sampling start from `sampling_steps`)
 
 		Args:
-			model: 
+			model (Denoise): use for calculate posterior mean and posterior variance
 			x_start (torch.Tensor): (batch_size, item_num)
-			steps (int): diffusion steps
+			sampling_steps (int): sampling start
 			sampling_noise (bool): whether to add noise
 		"""
 		if sampling_steps == 0:
 			x_t = x_start  #! steps default = 0
 		else:
 			timesteps = torch.tensor([sampling_steps-1] * x_start.shape[0], device=device)
-			x_t = self.q_sample(x_start, timesteps)
+			x_t = self.forward_cal_xt(x_start, timesteps)
 		
 		indices = list(range(self.steps))[::-1]  # reverse order
 
+		x0 = x_t # init
 		for i in indices:
 			timesteps = torch.tensor([i] * x_t.shape[0], device=device)  # (ttt...batch_size)
 			model_mean, model_log_variance = self.p_mean_variance(model, x_t, timesteps)
 			if sampling_noise:
 				noise = torch.randn_like(x_t)
 				nonzero_mask = ((timesteps!=0).float().view(-1, *([1]*(len(x_t.shape)-1))))
-				x_t = model_mean + nonzero_mask * torch.exp(0.5 * model_log_variance) * noise
+				x0 = model_mean + nonzero_mask * torch.exp(0.5 * model_log_variance) * noise
 			else:
-				x_t = model_mean
-		return x_t
+				x0 = model_mean
+		return x0
 
-	def q_sample(self, x_start: torch.Tensor, timesteps: torch.Tensor, noise: Optional[torch.Tensor] = None):
+	def forward_cal_xt(self, x_start: torch.Tensor, timesteps: torch.Tensor, noise: Optional[torch.Tensor] = None):
 		"""
 		Calculate x_t from x_0 and noise.
 
@@ -533,7 +534,7 @@ class GaussianDiffusion(nn.Module):
 		noise = torch.randn_like(x_start)
 		if self.noise_scale != 0:
 			# forward diffusion
-			x_t = self.q_sample(x_start, timesteps, noise)
+			x_t = self.forward_cal_xt(x_start, timesteps, noise)
 		else:
 			x_t = x_start
 		# backward diffusion (denoise)

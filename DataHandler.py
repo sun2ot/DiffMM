@@ -114,9 +114,9 @@ class DataHandler:
 		self.torchBiAdj = self.makeTorchAdj(trainMat) # (node_num, node_num)
 
 		self.trainData = TrainData(trainMat)
-		self.trainLoader = dataloader.DataLoader(self.trainData, batch_size=config.train.batch, shuffle=True, num_workers=0)
+		self.trainLoader: dataloader.DataLoader[TrainData] = dataloader.DataLoader(self.trainData, batch_size=config.train.batch, shuffle=True, num_workers=0)
 		self.testData = TestData(testMat, trainMat)
-		self.testLoader = dataloader.DataLoader(self.testData, batch_size=config.train.tstBat, shuffle=False, num_workers=0)
+		self.testLoader: dataloader.DataLoader[TestData] = dataloader.DataLoader(self.testData, batch_size=config.train.tstBat, shuffle=False, num_workers=0)
 
 		self.image_feats, config.data.image_feat_dim = self.loadFeatures(self.imagefile)
 		self.text_feats, config.data.text_feat_dim = self.loadFeatures(self.textfile)
@@ -124,7 +124,7 @@ class DataHandler:
 			self.audio_feats, config.data.audio_feat_dim = self.loadFeatures(self.audiofile)
 
 		self.diffusionData = DiffusionData(torch.tensor(self.trainMat.A, dtype=torch.float, device=device)) # .A == .toarray()
-		self.diffusionLoader = dataloader.DataLoader(self.diffusionData, batch_size=config.train.batch, shuffle=True, num_workers=0)
+		self.diffusionLoader: dataloader.DataLoader[DiffusionData] = dataloader.DataLoader(self.diffusionData, batch_size=config.train.batch, shuffle=True, num_workers=0)
 
 class TrainData(torch_dataset):
 	"""Train Dataset (with negative sampling func)"""
