@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 import toml
 
 """
@@ -36,12 +35,12 @@ class HyperConfig:
     noise_scale: float = 0.1
     noise_min: float = 0.0001
     noise_max: float = 0.02
+    steps: int = 5
 
     e_loss: float = 0.1
-    ris_lambda: float = 0.5
-    ris_adj_lambda: float = 0.2
+    residual_weight: float = 0.5
+    modal_adj_weight: float = 0.2
 
-    steps: int = 5
     sampling_steps: int = 0
     rebuild_k: int = 1
 

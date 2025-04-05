@@ -3,10 +3,10 @@ latdim = 64 # Embedding size
 topk = 20
 gpu = "0"
 seed = 421 # Random seed
-dims = "[1000]" # Dimensions (str)
-d_emb_size = 10 # Embedding size for discriminator
+dims = "[1000]" # embedding size for diffusion input/output 
+d_emb_size = 10 # time embedding size for diffusion step
 
-# Transformation type: 0 = R*R, 1 = Linear, 2 = allrecipes
+# Transformation type: 0 = Project Matrix, 1 = Linear, 2 = allrecipes
 trans = 0
 
 # Contrastive learning method: 0 = m vs m, 1 = m vs main
@@ -27,13 +27,13 @@ keepRate = 0.5 # Ratio of edges to keep
 noise_scale = 0.1 # Noise scale
 noise_min = 0.0001 # Minimum noise
 noise_max = 0.02 # Maximum noise
+steps = 5 # Number of steps
 
 e_loss = 0.1 # Edge loss
-ris_lambda = 0.5  # RIS lambda
-ris_adj_lambda = 0.2 # RIS adjacency lambda
+final_embs_weight = 0.5  # RIS lambda
+modal_adj_weight = 0.2
 
-steps = 5 # Number of steps
-sampling_steps = 0 # Number of sampling steps
+sampling_steps = 0 # Initial sampling steps for the inverse diffusion process
 rebuild_k = 1 # Rebuild k
 
 # ------------------------------------------------------------

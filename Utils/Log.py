@@ -11,13 +11,13 @@ main_log.setLevel(logging.INFO)
 log_time = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
 os.makedirs(f"logs", exist_ok=True)
 file_handler = logging.FileHandler(f"logs/{log_time}.log")
-file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s', datefmt='%m/%d %H:%M:%S')
+file_formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%m/%d %H:%M:%S')
 file_handler.setFormatter(file_formatter)
 main_log.addHandler(file_handler)
 
 # stream handler
 console_handler = logging.StreamHandler()
-console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s', datefmt='%m/%d %H:%M:%S')
+console_formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%m/%d %H:%M:%S')
 console_handler.setFormatter(console_formatter)
 main_log.addHandler(console_handler)
 

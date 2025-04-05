@@ -10,10 +10,12 @@ In this paper, we propose DiffMM, a new multi-modal recommendation model that en
 
 We develop our codes in the following environment:
 
-- python==3.9.13
-- numpy==1.23.1
-- torch==1.11.0
+- python==3.10.16 
+- numpy==1.24.3
+- torch==2.4.0
 - scipy==1.9.1
+- tqdm==4.67.1
+- setproctitle=1.2.2 
 
 ## 🎯 Experimental Results
 
