@@ -1,40 +1,40 @@
 import torch
-from torch import nn
+from torch import nn, Tensor
 import torch.nn.functional as F
-#from Params import args
 from Conf import config
 import numpy as np
-import random
 import math
 from Utils.Utils import *
+from typing import Optional
 
-init = nn.init.xavier_uniform_
-uniformInit = nn.init.uniform
+init = nn.init.xavier_uniform_  # specific init func
+uniformInit = nn.init.uniform   # func factory
+device = torch.device(f"cuda:{config.base.gpu}" if torch.cuda.is_available() else "cpu")
 
 class Model(nn.Module):
 	def __init__(self, image_embedding, text_embedding, audio_embedding=None):
 		super(Model, self).__init__()
 
-		self.uEmbeds = nn.Parameter(init(torch.empty(config.data.user_num, config.base.latdim)))
-		self.iEmbeds = nn.Parameter(init(torch.empty(config.data.item_num, config.base.latdim)))
-		self.gcnLayers = nn.Sequential(*[GCNLayer() for i in range(config.train.gnn_layer)])
+		self.u_embs = nn.Parameter(init(torch.empty(config.data.user_num, config.base.latdim)))
+		self.i_embs = nn.Parameter(init(torch.empty(config.data.item_num, config.base.latdim)))
+		self.layer = nn.Sequential(*[GCNLayer() for i in range(config.train.gnn_layer)])
 
 		self.edgeDropper = SpAdjDropEdge(config.hyper.keepRate)
 
 		if config.base.trans == 1:
-			self.image_trans = nn.Linear(config.data.image_feat_dim, config.base.latdim)
-			self.text_trans = nn.Linear(config.data.text_feat_dim, config.base.latdim)
+			self.image_layer = nn.Linear(config.data.image_feat_dim, config.base.latdim)
+			self.text_layer = nn.Linear(config.data.text_feat_dim, config.base.latdim)
 		elif config.base.trans == 0:
-			self.image_trans = nn.Parameter(init(torch.empty(size=(config.data.image_feat_dim, config.base.latdim))))
-			self.text_trans = nn.Parameter(init(torch.empty(size=(config.data.text_feat_dim, config.base.latdim))))
-		else:
-			self.image_trans = nn.Parameter(init(torch.empty(size=(config.data.image_feat_dim, config.base.latdim))))
-			self.text_trans = nn.Linear(config.data.text_feat_dim, config.base.latdim)
+			self.image_matrix = nn.Parameter(init(torch.empty(size=(config.data.image_feat_dim, config.base.latdim))))
+			self.text_matrix = nn.Parameter(init(torch.empty(size=(config.data.text_feat_dim, config.base.latdim))))
+		else:  # config.base.trans == 2
+			self.image_matrix = nn.Parameter(init(torch.empty(size=(config.data.image_feat_dim, config.base.latdim))))
+			self.text_layer = nn.Linear(config.data.text_feat_dim, config.base.latdim)
 		if audio_embedding != None:
 			if config.base.trans == 1:
-				self.audio_trans = nn.Linear(config.data.audio_feat_dim, config.base.latdim)
+				self.audio_layer = nn.Linear(config.data.audio_feat_dim, config.base.latdim)
 			else:
-				self.audio_trans = nn.Parameter(init(torch.empty(size=(config.data.audio_feat_dim, config.base.latdim))))
+				self.audio_matrix = nn.Parameter(init(torch.empty(size=(config.data.audio_feat_dim, config.base.latdim))))
 
 		self.image_embedding = image_embedding
 		self.text_embedding = text_embedding
@@ -42,183 +42,228 @@ class Model(nn.Module):
 			self.audio_embedding = audio_embedding
 		else:
 			self.audio_embedding = None
-
+		
+		# average weight
 		if audio_embedding != None:
-			self.modal_weight = nn.Parameter(torch.Tensor([0.3333, 0.3333, 0.3333]))
+			self.modal_weight = nn.Parameter(torch.tensor([0.3333, 0.3333, 0.3333]))
 		else:
-			self.modal_weight = nn.Parameter(torch.Tensor([0.5, 0.5]))
+			self.modal_weight = nn.Parameter(torch.tensor([0.5, 0.5]))
+		
 		self.softmax = nn.Softmax(dim=0)
-
 		self.dropout = nn.Dropout(p=0.1)
-
 		self.leakyrelu = nn.LeakyReLU(0.2)
 				
-	def getItemEmbeds(self):
-		return self.iEmbeds
+	def getItemEmbs(self):
+		return self.i_embs
 	
-	def getUserEmbeds(self):
-		return self.uEmbeds
+	def getUserEmbs(self):
+		return self.u_embs
 	
-	def getImageFeats(self):
+	def getImageFeats(self) -> torch.Tensor:
 		if config.base.trans == 0 or config.base.trans == 2:
-			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_trans))
+			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_matrix))
 			return image_feats
 		else:
-			return self.image_trans(self.image_embedding)
+			return self.image_layer(self.image_embedding)
 	
-	def getTextFeats(self):
+	def getTextFeats(self) -> torch.Tensor:
 		if config.base.trans == 0:
-			text_feats = self.leakyrelu(torch.mm(self.text_embedding, self.text_trans))
+			text_feats = self.leakyrelu(torch.mm(self.text_embedding, self.text_matrix))
 			return text_feats
 		else:
-			return self.text_trans(self.text_embedding)
+			return self.text_layer(self.text_embedding)
 
-	def getAudioFeats(self):
+	def getAudioFeats(self) -> None | torch.Tensor:
 		if self.audio_embedding == None:
 			return None
 		else:
 			if config.base.trans == 0:
-				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_trans))
+				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_matrix))
 			else:
-				audio_feats = self.audio_trans(self.audio_embedding)
+				audio_feats = self.audio_layer(self.audio_embedding)
 		return audio_feats
 
-	def forward_MM(self, adj, image_adj, text_adj, audio_adj=None):
+	def forward_MM(self, adj: Tensor, image_adj: Tensor, text_adj: Tensor, audio_adj: Optional[Tensor] = None):
+		"""
+		Multimodal graph aggregation.
+
+		Args:
+			adj (Tensor): CF matrix
+			image_adj (Tensor): CF matrix for image modal
+			text_adj (Tensor): CF matrix for text modal
+			audio_adj (Tensor): CF matrix for audio modal
+		Returns:
+			Tuple (Tensor, Tensor): (final_user_embs, final_item_embs)
+		"""
+
+		# Trans multimodal feats to 64 (latdim)
 		if config.base.trans == 0:
-			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_trans))
-			text_feats = self.leakyrelu(torch.mm(self.text_embedding, self.text_trans))
+			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_matrix))
+			text_feats = self.leakyrelu(torch.mm(self.text_embedding, self.text_matrix))
 		elif config.base.trans == 1:
-			image_feats = self.image_trans(self.image_embedding)
-			text_feats = self.text_trans(self.text_embedding)
+			image_feats = self.image_layer(self.image_embedding)
+			text_feats = self.text_layer(self.text_embedding)
 		else:
-			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_trans))
-			text_feats = self.text_trans(self.text_embedding)
+			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_matrix))
+			text_feats = self.text_layer(self.text_embedding)
 
 		if audio_adj != None:
 			if config.base.trans == 0:
-				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_trans))
+				assert self.audio_embedding != None
+				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_matrix))
 			else:
-				audio_feats = self.audio_trans(self.audio_embedding)
+				audio_feats = self.audio_layer(self.audio_embedding)
+		else:
+			audio_feats = None
 
-		weight = self.softmax(self.modal_weight)
+		weight: nn.Parameter = self.softmax(self.modal_weight)
 
-		embedsImageAdj = torch.concat([self.uEmbeds, self.iEmbeds])
-		embedsImageAdj = torch.spmm(image_adj, embedsImageAdj)
+		# image
+		# Eq.20 the third part
+		image_adj_embs = torch.concat([self.u_embs, self.i_embs])  # (node, dim)
+		image_adj_embs = torch.spmm(image_adj, image_adj_embs)  # (node, dim)
 
-		embedsImage = torch.concat([self.uEmbeds, F.normalize(image_feats)])
-		embedsImage = torch.spmm(adj, embedsImage)
+		# Eq.20 the first part
+		image_aware_embs = torch.concat([self.u_embs, F.normalize(image_feats)])  # (node, dim)
+		image_aware_embs = torch.spmm(adj, image_aware_embs)  # (node, dim)
 
-		embedsImage_ = torch.concat([embedsImage[:config.data.user_num], self.iEmbeds])
-		embedsImage_ = torch.spmm(adj, embedsImage_)
-		embedsImage += embedsImage_
+		# Eq.20 the second part
+		horder_image_aware_embs = torch.concat([image_aware_embs[:config.data.user_num], self.i_embs])
+		horder_image_aware_embs = torch.spmm(adj, horder_image_aware_embs)
+		image_aware_embs += horder_image_aware_embs
 		
-		embedsTextAdj = torch.concat([self.uEmbeds, self.iEmbeds])
-		embedsTextAdj = torch.spmm(text_adj, embedsTextAdj)
+		# text
+		text_adj_embs = torch.concat([self.u_embs, self.i_embs])
+		text_adj_embs = torch.spmm(text_adj, text_adj_embs)
 
-		embedsText = torch.concat([self.uEmbeds, F.normalize(text_feats)])
-		embedsText = torch.spmm(adj, embedsText)
+		text_aware_embs = torch.concat([self.u_embs, F.normalize(text_feats)])
+		text_aware_embs = torch.spmm(adj, text_aware_embs)
 
-		embedsText_ = torch.concat([embedsText[:config.data.user_num], self.iEmbeds])
-		embedsText_ = torch.spmm(adj, embedsText_)
-		embedsText += embedsText_
+		horder_text_aware_embs = torch.concat([text_aware_embs[:config.data.user_num], self.i_embs])
+		horder_text_aware_embs = torch.spmm(adj, horder_text_aware_embs)
+		text_aware_embs += horder_text_aware_embs
 
+		# audio
 		if audio_adj != None:
-			embedsAudioAdj = torch.concat([self.uEmbeds, self.iEmbeds])
-			embedsAudioAdj = torch.spmm(audio_adj, embedsAudioAdj)
+			audio_adj_embs = torch.concat([self.u_embs, self.i_embs])
+			audio_adj_embs = torch.spmm(audio_adj, audio_adj_embs)
 
-			embedsAudio = torch.concat([self.uEmbeds, F.normalize(audio_feats)])
-			embedsAudio = torch.spmm(adj, embedsAudio)
+			assert audio_feats != None
+			audio_aware_embs = torch.concat([self.u_embs, F.normalize(audio_feats)])
+			audio_aware_embs = torch.spmm(adj, audio_aware_embs)
 
-			embedsAudio_ = torch.concat([embedsAudio[:config.data.user_num], self.iEmbeds])
-			embedsAudio_ = torch.spmm(adj, embedsAudio_)
-			embedsAudio += embedsAudio_
+			horder_audio_aware_embs = torch.concat([audio_aware_embs[:config.data.user_num], self.i_embs])
+			horder_audio_aware_embs = torch.spmm(adj, horder_audio_aware_embs)
+			audio_aware_embs += horder_audio_aware_embs
+		else:
+			audio_adj_embs, audio_aware_embs = None, None
 
-		embedsImage += config.hyper.ris_adj_lambda * embedsImageAdj
-		embedsText += config.hyper.ris_adj_lambda * embedsTextAdj
+		image_aware_embs += config.hyper.modal_adj_weight * image_adj_embs
+		text_aware_embs += config.hyper.modal_adj_weight * text_adj_embs
 		if audio_adj != None:
-			embedsAudio += config.hyper.ris_adj_lambda * embedsAudioAdj
+			assert audio_adj_embs != None
+			audio_aware_embs += config.hyper.modal_adj_weight * audio_adj_embs
+		
 		if audio_adj == None:
-			embedsModal = weight[0] * embedsImage + weight[1] * embedsText
+			modal_embs = weight[0] * image_aware_embs + weight[1] * text_aware_embs
 		else:
-			embedsModal = weight[0] * embedsImage + weight[1] * embedsText + weight[2] * embedsAudio
+			modal_embs = weight[0] * image_aware_embs + weight[1] * text_aware_embs + weight[2] * audio_aware_embs
 
-		embeds = embedsModal
-		embedsLst = [embeds]
-		for gcn in self.gcnLayers:
-			embeds = gcn(adj, embedsLst[-1])
-			embedsLst.append(embeds)
-		embeds = sum(embedsLst)
+		final_embs = modal_embs
+		embs_list = [final_embs]
+		for gcn in self.layer:  # Eq.22
+			final_embs = gcn(adj, embs_list[-1])
+			embs_list.append(final_embs)
+		final_embs = sum(embs_list)
 
-		embeds = embeds + config.hyper.ris_lambda * F.normalize(embedsModal)
+		final_embs = final_embs + config.hyper.residual_weight * F.normalize(modal_embs)
 
-		return embeds[:config.data.user_num], embeds[config.data.user_num:]
+		return final_embs[:config.data.user_num], final_embs[config.data.user_num:]
 
-	def forward_cl_MM(self, adj, image_adj, text_adj, audio_adj=None):
+	def forward_cl_MM(self, adj: Tensor, image_adj: Tensor, text_adj: Tensor, audio_adj: Optional[Tensor] = None):
+		"""
+		Multimodal graph aggregation for CL task?
+
+		Returns:
+			image_u_embs, image_i_embs, text_u_embs, text_i_embs, Optional(audio_u_embs, audio_i_embs)
+		"""
 		if config.base.trans == 0:
-			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_trans))
-			text_feats = self.leakyrelu(torch.mm(self.text_embedding, self.text_trans))
+			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_matrix))
+			text_feats = self.leakyrelu(torch.mm(self.text_embedding, self.text_matrix))
 		elif config.base.trans == 1:
-			image_feats = self.image_trans(self.image_embedding)
-			text_feats = self.text_trans(self.text_embedding)
+			image_feats = self.image_layer(self.image_embedding)
+			text_feats = self.text_layer(self.text_embedding)
 		else:
-			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_trans))
-			text_feats = self.text_trans(self.text_embedding)
+			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_matrix))
+			text_feats = self.text_layer(self.text_embedding)
 
 		if audio_adj != None:
 			if config.base.trans == 0:
-				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_trans))
+				assert self.audio_embedding != None
+				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_matrix))
 			else:
-				audio_feats = self.audio_trans(self.audio_embedding)
+				audio_feats = self.audio_layer(self.audio_embedding)
+		else:
+			audio_feats = None
 
-		embedsImage = torch.concat([self.uEmbeds, F.normalize(image_feats)])
-		embedsImage = torch.spmm(image_adj, embedsImage)
+		image_aware_embs = torch.concat([self.u_embs, F.normalize(image_feats)])
+		image_aware_embs = torch.spmm(image_adj, image_aware_embs)
 
-		embedsText = torch.concat([self.uEmbeds, F.normalize(text_feats)])
-		embedsText = torch.spmm(text_adj, embedsText)
-
-		if audio_adj != None:
-			embedsAudio = torch.concat([self.uEmbeds, F.normalize(audio_feats)])
-			embedsAudio = torch.spmm(audio_adj, embedsAudio)
-
-		embeds1 = embedsImage
-		embedsLst1 = [embeds1]
-		for gcn in self.gcnLayers:
-			embeds1 = gcn(adj, embedsLst1[-1])
-			embedsLst1.append(embeds1)
-		embeds1 = sum(embedsLst1)
-
-		embeds2 = embedsText
-		embedsLst2 = [embeds2]
-		for gcn in self.gcnLayers:
-			embeds2 = gcn(adj, embedsLst2[-1])
-			embedsLst2.append(embeds2)
-		embeds2 = sum(embedsLst2)
+		text_aware_embs = torch.concat([self.u_embs, F.normalize(text_feats)])
+		text_aware_embs = torch.spmm(text_adj, text_aware_embs)
 
 		if audio_adj != None:
-			embeds3 = embedsAudio
-			embedsLst3 = [embeds3]
-			for gcn in self.gcnLayers:
-				embeds3 = gcn(adj, embedsLst3[-1])
-				embedsLst3.append(embeds3)
-			embeds3 = sum(embedsLst3)
+			assert audio_feats != None
+			audio_aware_embs = torch.concat([self.u_embs, F.normalize(audio_feats)])
+			audio_aware_embs = torch.spmm(audio_adj, audio_aware_embs)
+		else:
+			audio_aware_embs = None
+
+		image_modal_embs = image_aware_embs
+		image_embs_list = [image_modal_embs]
+		for gcn in self.layer:
+			image_modal_embs = gcn(adj, image_embs_list[-1])
+			image_embs_list.append(image_modal_embs)
+		image_modal_embs = torch.sum(torch.stack(image_embs_list), dim=0)
+
+		text_modal_embs = text_aware_embs
+		text_embs_list = [text_modal_embs]
+		for gcn in self.layer:
+			text_modal_embs = gcn(adj, text_embs_list[-1])
+			text_embs_list.append(text_modal_embs)
+		text_modal_embs = torch.sum(torch.stack(text_embs_list), dim=0)
+
+		if audio_adj != None:
+			assert audio_aware_embs != None
+			audio_modal_embs = audio_aware_embs
+			audio_embs_list = [audio_modal_embs]
+			for gcn in self.layer:
+				audio_modal_embs = gcn(adj, audio_embs_list[-1])
+				audio_embs_list.append(audio_modal_embs)
+			audio_modal_embs = torch.sum(torch.stack(audio_embs_list), dim=0)
+		else:
+			audio_modal_embs = None
 
 		if audio_adj == None:
-			return embeds1[:config.data.user_num], embeds1[config.data.user_num:], embeds2[:config.data.user_num], embeds2[config.data.user_num:]
+			return image_modal_embs[:config.data.user_num], image_modal_embs[config.data.user_num:], text_modal_embs[:config.data.user_num], text_modal_embs[config.data.user_num:]
 		else:
-			return embeds1[:config.data.user_num], embeds1[config.data.user_num:], embeds2[:config.data.user_num], embeds2[config.data.user_num:], embeds3[:config.data.user_num], embeds3[config.data.user_num:]
+			assert audio_modal_embs != None
+			return image_modal_embs[:config.data.user_num], image_modal_embs[config.data.user_num:], text_modal_embs[:config.data.user_num], text_modal_embs[config.data.user_num:], audio_modal_embs[:config.data.user_num], audio_modal_embs[config.data.user_num:]
 
 	def reg_loss(self):
-		ret = 0
-		ret += self.uEmbeds.norm(2).square()
-		ret += self.iEmbeds.norm(2).square()
-		return ret
+		loss = 0
+		loss += self.u_embs.norm(2).square()
+		loss += self.i_embs.norm(2).square()
+		return loss
 
 class GCNLayer(nn.Module):
+	"""adi @ embs"""
 	def __init__(self):
 		super(GCNLayer, self).__init__()
 
-	def forward(self, adj, embeds):
-		return torch.spmm(adj, embeds)
+	def forward(self, adj: Tensor, embs: Tensor):
+		"""sparse matrix multiplication"""
+		return torch.spmm(adj, embs)
 
 class SpAdjDropEdge(nn.Module):
 	def __init__(self, keepRate):
@@ -238,19 +283,31 @@ class SpAdjDropEdge(nn.Module):
 		
 class Denoise(nn.Module):
 	def __init__(self, in_dims, out_dims, emb_size, norm=False, dropout=0.5):
+		"""
+		Denoiser class for the diffusion model.
+
+		Args:
+			in_dims (list): (item_num, 1000).
+			out_dims (list): (1000, item_num)
+			emb_size (int): 
+			norm (bool): Whether to normalize the input
+			dropout (float): 
+		"""
 		super(Denoise, self).__init__()
 		self.in_dims = in_dims
 		self.out_dims = out_dims
-		self.time_emb_dim = emb_size
+		self.time_emb_dim = emb_size #* time embedding size for diffusion step
 		self.norm = norm
 
-		self.emb_layer = nn.Linear(self.time_emb_dim, self.time_emb_dim)
+		self.emb_layer = nn.Linear(self.time_emb_dim, self.time_emb_dim) # (10, 10)
 
-		in_dims_temp = [self.in_dims[0] + self.time_emb_dim] + self.in_dims[1:]
+		in_dims_temp: list = [self.in_dims[0] + self.time_emb_dim] + self.in_dims[1:]  # (item_num+10, 1000)
+		out_dims_temp: list = self.out_dims  # (1000, item_num)
 
-		out_dims_temp = self.out_dims
-
+		#! What is the dims for?
+		# (item_num+10, 1000)
 		self.in_layers = nn.ModuleList([nn.Linear(d_in, d_out) for d_in, d_out in zip(in_dims_temp[:-1], in_dims_temp[1:])])
+		# (1000, item_num)
 		self.out_layers = nn.ModuleList([nn.Linear(d_in, d_out) for d_in, d_out in zip(out_dims_temp[:-1], out_dims_temp[1:])])
 
 		self.drop = nn.Dropout(dropout)
@@ -258,46 +315,55 @@ class Denoise(nn.Module):
 
 	def init_weights(self):
 		for layer in self.in_layers:
-			size = layer.weight.size()
-			std = np.sqrt(2.0 / (size[0] + size[1]))
-			layer.weight.data.normal_(0.0, std)
-			layer.bias.data.normal_(0.0, 0.001)
-		
+			nn.init.xavier_normal_(layer.weight) # initialize weights using xavier normal distribution
+			nn.init.normal_(layer.bias, mean=0.0, std=0.001)  # bias initialized to normal distribution
+
 		for layer in self.out_layers:
-			size = layer.weight.size()
-			std = np.sqrt(2.0 / (size[0] + size[1]))
-			layer.weight.data.normal_(0.0, std)
-			layer.bias.data.normal_(0.0, 0.001)
+			nn.init.xavier_normal_(layer.weight)
+			nn.init.normal_(layer.bias, mean=0.0, std=0.001)
 
-		size = self.emb_layer.weight.size()
-		std = np.sqrt(2.0 / (size[0] + size[1]))
-		self.emb_layer.weight.data.normal_(0.0, std)
-		self.emb_layer.bias.data.normal_(0.0, 0.001)
+		nn.init.xavier_normal_(self.emb_layer.weight)
+		nn.init.normal_(self.emb_layer.bias, mean=0.0, std=0.001)
 
-	def forward(self, x, timesteps, mess_dropout=True):
-		freqs = torch.exp(-math.log(10000) * torch.arange(start=0, end=self.time_emb_dim//2, dtype=torch.float32) / (self.time_emb_dim//2)).cuda()
-		temp = timesteps[:, None].float() * freqs[None]
-		time_emb = torch.cat([torch.cos(temp), torch.sin(temp)], dim=-1)
+	def forward(self, x: torch.Tensor, timesteps: torch.Tensor, mess_dropout=True) -> torch.Tensor:
+		"""
+		Denoise Layer
+
+		Args:
+			x (torch.Tensor): batch_u_items, (batch_size, item_num)
+			timesteps (torch.Tensor): (batch_size)
+		
+		Returns:
+			h (torch.Tensor): denoised view (batch_size, item_num)
+		"""
+		# Use Transformer Positional Encoding to get time embeddings
+		freqs = torch.exp(-math.log(10000) * torch.arange(start=0, end=self.time_emb_dim//2, dtype=torch.float32) / (self.time_emb_dim//2)).cuda(device) # size = (5)
+		temp = timesteps.unsqueeze(-1).float() * freqs.unsqueeze(0)  # (batch, 5)
+		time_emb = torch.cat([torch.cos(temp), torch.sin(temp)], dim=-1)  # (batch, 10)
 		if self.time_emb_dim % 2:
+			# Force the last dimension is even (cat with zeros col)
 			time_emb = torch.cat([time_emb, torch.zeros_like(time_emb[:, :1])], dim=-1)
-		emb = self.emb_layer(time_emb)
+		emb = self.emb_layer(time_emb)  # (batch, 10)
+
 		if self.norm:
 			x = F.normalize(x)
 		if mess_dropout:
 			x = self.drop(x)
-		h = torch.cat([x, emb], dim=-1)
+		
+		h = torch.cat([x, emb], dim=-1)  # (batch, item_num+10)
 		for i, layer in enumerate(self.in_layers):
 			h = layer(h)
-			h = torch.tanh(h)
+			h = torch.tanh(h)  #? how about other activation functions?
 		for i, layer in enumerate(self.out_layers):
 			h = layer(h)
 			if i != len(self.out_layers) - 1:
+				# not the last layer
 				h = torch.tanh(h)
 
-		return h
+		return h  # (batch, item_num)
 
 class GaussianDiffusion(nn.Module):
-	def __init__(self, noise_scale, noise_min, noise_max, steps, beta_fixed=True):
+	def __init__(self, noise_scale: float, noise_min: float, noise_max: float, steps: int, beta_fixed=True):
 		super(GaussianDiffusion, self).__init__()
 
 		self.noise_scale = noise_scale
@@ -306,13 +372,15 @@ class GaussianDiffusion(nn.Module):
 		self.steps = steps
 
 		if noise_scale != 0:
-			self.betas = torch.tensor(self.get_betas(), dtype=torch.float64).cuda()
+			self.betas = torch.tensor(self.get_betas(), dtype=torch.float64, device=device)
 			if beta_fixed:
 				self.betas[0] = 0.0001
 
 			self.calculate_for_diffusion()
 
 	def get_betas(self):
+		"""Generate noise param (beta) for diffusion process."""
+		#todo: adaptive generation of beta?
 		start = self.noise_scale * self.noise_min
 		end = self.noise_scale * self.noise_max
 		variance = np.linspace(start, end, self.steps, dtype=np.float64)
@@ -321,101 +389,179 @@ class GaussianDiffusion(nn.Module):
 		betas.append(1 - alpha_bar[0])
 		for i in range(1, self.steps):
 			betas.append(min(1 - alpha_bar[i] / alpha_bar[i-1], 0.999))
-		return np.array(betas) 
+		return np.array(betas)
 
 	def calculate_for_diffusion(self):
-		alphas = 1.0 - self.betas
-		self.alphas_cumprod = torch.cumprod(alphas, axis=0).cuda()
-		self.alphas_cumprod_prev = torch.cat([torch.tensor([1.0]).cuda(), self.alphas_cumprod[:-1]]).cuda()
-		self.alphas_cumprod_next = torch.cat([self.alphas_cumprod[1:], torch.tensor([0.0]).cuda()]).cuda()
+		alphas = 1.0 - self.betas  # α = 1-β: (5)
+		self.alphas_cumprod = torch.cumprod(alphas, dim=0)  # \bar{α}: (5)
+		self.alphas_cumprod_prev = torch.cat([torch.tensor([1.0], device=device), self.alphas_cumprod[:-1]])  # t-1 step
+		self.alphas_cumprod_next = torch.cat([self.alphas_cumprod[1:], torch.tensor([0.0], device=device)])   # t+1 step
 
-		self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)
-		self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - self.alphas_cumprod)
-		self.log_one_minus_alphas_cumprod = torch.log(1.0 - self.alphas_cumprod)
-		self.sqrt_recip_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod)
-		self.sqrt_recipm1_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod - 1)
-
+		self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)  # \sqrt{\bar{α}}
+		self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - self.alphas_cumprod)  # \sqrt{1-\bar{α}}
+		self.log_one_minus_alphas_cumprod = torch.log(1.0 - self.alphas_cumprod)  # \log(1-\bar{α})
+		self.sqrt_reciprocal_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod)  # \sqrt{ 1 / \bar{α} }
+		self.sqrt_reciprocalm1_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod - 1)  # \sqrt{ 1/\bar{α} - 1}
+		
+		# predicted β = β x (1-\bar{α}_{t-1}) / (1-\bar{α}_{t})
 		self.posterior_variance = (
 			self.betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
 		)
+		#! because pos_var[0] = 0, so we need to clip it. use pos_var[1] instead
+		#? so is it because of the determined beta?
 		self.posterior_log_variance_clipped = torch.log(torch.cat([self.posterior_variance[1].unsqueeze(0), self.posterior_variance[1:]]))
+		# x0's coefficient = β x \sqrt{\bar{α}_{t-1}} / (1-\bar{α}_{t})
+		#! for inverse diffusion process (denoise), x0 is a unknown variable. is this correct?
 		self.posterior_mean_coef1 = (self.betas * torch.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod))
+		# xt's coefficient = (1-\bar{α}_{t-1}) x \sqrt{α} / (1-\bar{α}_{t})
 		self.posterior_mean_coef2 = ((1.0 - self.alphas_cumprod_prev) * torch.sqrt(alphas) / (1.0 - self.alphas_cumprod))
 
-	def p_sample(self, model, x_start, steps, sampling_noise=False):
-		if steps == 0:
-			x_t = x_start
+	def calculate_for_diffusion2(self):
+		alphas = 1.0 - self.betas  # α = 1 - β
+		self.alphas_cumprod = torch.cumprod(alphas, dim=0)  # \bar{α}
+		self.alphas_cumprod_prev = torch.cat([torch.tensor([1.0], device=device), self.alphas_cumprod[:-1]])  # t-1 step
+		self.alphas_cumprod_next = torch.cat([self.alphas_cumprod[1:], torch.tensor([0.0], device=device)])   # t+1 step
+
+		self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)  # \sqrt{\bar{α}}
+		self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - self.alphas_cumprod)  # \sqrt{1 - \bar{α}}
+
+		# 后验方差
+		self.posterior_variance = (
+			self.betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
+		)
+		self.posterior_log_variance_clipped = torch.log(
+			torch.cat([self.posterior_variance[1].unsqueeze(0), self.posterior_variance[1:]])
+		)
+
+		# 均值计算简化
+		self.posterior_mean_coef1 = 1.0 / torch.sqrt(alphas)  # 1 / sqrt(α)
+		self.posterior_mean_coef2 = (1.0 - alphas) / (torch.sqrt(1.0 - self.alphas_cumprod))  # (1 - α) / sqrt(1 - \bar{α})
+
+	def p_sample(self, model: Denoise, x_start: torch.Tensor, sampling_steps: int, sampling_noise=False):
+		"""
+		inverse diffusion process (sampling for x_{t-1})
+
+		Args:
+			model: 
+			x_start (torch.Tensor): (batch_size, item_num)
+			steps (int): diffusion steps
+			sampling_noise (bool): whether to add noise
+		"""
+		if sampling_steps == 0:
+			x_t = x_start  #! steps default = 0
 		else:
-			t = torch.tensor([steps-1] * x_start.shape[0]).cuda()
-			x_t = self.q_sample(x_start, t)
+			timesteps = torch.tensor([sampling_steps-1] * x_start.shape[0], device=device)
+			x_t = self.q_sample(x_start, timesteps)
 		
-		indices = list(range(self.steps))[::-1]
+		indices = list(range(self.steps))[::-1]  # reverse order
 
 		for i in indices:
-			t = torch.tensor([i] * x_t.shape[0]).cuda()
-			model_mean, model_log_variance = self.p_mean_variance(model, x_t, t)
+			timesteps = torch.tensor([i] * x_t.shape[0], device=device)  # (ttt...batch_size)
+			model_mean, model_log_variance = self.p_mean_variance(model, x_t, timesteps)
 			if sampling_noise:
 				noise = torch.randn_like(x_t)
-				nonzero_mask = ((t!=0).float().view(-1, *([1]*(len(x_t.shape)-1))))
+				nonzero_mask = ((timesteps!=0).float().view(-1, *([1]*(len(x_t.shape)-1))))
 				x_t = model_mean + nonzero_mask * torch.exp(0.5 * model_log_variance) * noise
 			else:
 				x_t = model_mean
 		return x_t
 
-	def q_sample(self, x_start, t, noise=None):
+	def q_sample(self, x_start: torch.Tensor, timesteps: torch.Tensor, noise: Optional[torch.Tensor] = None):
+		"""
+		Calculate x_t from x_0 and noise.
+
+		Args:
+			x_start: (batch, item)
+			timesteps: (batch,)
+			noise: Default is None. If not provided, torch.randn_like(x_start)
+
+		Returns:
+			torch.Tensor: Forward diffusion process x_t.
+		"""
 		if noise is None:
 			noise = torch.randn_like(x_start)
-		return self._extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start + self._extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
+		# x_t = \sqrt{\bar{α}_{t}} * x_0 + \sqrt{1-\bar{α}_{t}} * noise
+		return self._extract_into_tensor(self.sqrt_alphas_cumprod, timesteps, x_start.shape) * x_start + self._extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, timesteps, x_start.shape) * noise
 
-	def _extract_into_tensor(self, arr, timesteps, broadcast_shape):
-		arr = arr.cuda()
-		res = arr[timesteps].float()
+	def _extract_into_tensor(self, var: torch.Tensor, timesteps: torch.Tensor, broadcast_shape: torch.Size):
+		"""
+		Extract every timestep's posterior variance, and broadcast it to the batch_item.
+		
+		Args:
+			var (torch.Tensor): posterior_variance (5)
+			timesteps (torch.Tensor): (ttt...batch)
+			broadcast_shape (torch.Size): (batch, item)
+		"""
+		res = var[timesteps].float() #? .float() is necessary?
 		while len(res.shape) < len(broadcast_shape):
-			res = res[..., None]
+			res = res.unsqueeze(-1)
 		return res.expand(broadcast_shape)
 
-	def p_mean_variance(self, model, x, t):
-		model_output = model(x, t, False)
+	def p_mean_variance(self, denoise: Denoise, x_t: torch.Tensor, timesteps: torch.Tensor):
+		"""
+		calculate posterior mean and posterior variance for inverse diffusion process
+
+		Args:
+			x (torch.Tensor): (batch_size, item_num)
+			timesteps (torch.Tensor): (ttt...batch_size)
+		"""
+		predicted_alpha0 = denoise(x_t, timesteps, False)
 
 		model_variance = self.posterior_variance
 		model_log_variance = self.posterior_log_variance_clipped
 
-		model_variance = self._extract_into_tensor(model_variance, t, x.shape)
-		model_log_variance = self._extract_into_tensor(model_log_variance, t, x.shape)
+		model_variance = self._extract_into_tensor(model_variance, timesteps, x_t.shape)
+		model_log_variance = self._extract_into_tensor(model_log_variance, timesteps, x_t.shape)
 
-		model_mean = (self._extract_into_tensor(self.posterior_mean_coef1, t, x.shape) * model_output + self._extract_into_tensor(self.posterior_mean_coef2, t, x.shape) * x)
+		model_mean = (self._extract_into_tensor(self.posterior_mean_coef1, timesteps, x_t.shape) * predicted_alpha0 + self._extract_into_tensor(self.posterior_mean_coef2, timesteps, x_t.shape) * x_t)
 		
 		return model_mean, model_log_variance
 
-	def training_losses(self, model, x_start, itmEmbeds, batch_index, model_feats):
+	def training_losses(self, model: Denoise, x_start: torch.Tensor, i_embs: torch.Tensor, model_feats: torch.Tensor):
+		"""
+		Args:
+			x_start: (batch, item)
+			i_embs: (item, dim)
+			model_feats: (item, dim)
+		
+		Returns:
+			tuple (Tensor, Tensor): (fit_noise_loss, refact_ui_loss): (batch, batch)
+		"""
 		batch_size = x_start.size(0)
 
-		ts = torch.randint(0, self.steps, (batch_size,)).long().cuda()
+		timesteps = torch.randint(0, self.steps, (batch_size,), device=device)
 		noise = torch.randn_like(x_start)
 		if self.noise_scale != 0:
-			x_t = self.q_sample(x_start, ts, noise)
+			# forward diffusion
+			x_t = self.q_sample(x_start, timesteps, noise)
 		else:
 			x_t = x_start
+		# backward diffusion (denoise)
+		model_output = model.forward(x_t, timesteps)
 
-		model_output = model(x_t, ts)
+		mse_loss = self.MSELoss(x_start, model_output)  # (batch)
+		weight = self.SNR(timesteps - 1) - self.SNR(timesteps)  # the \lambda_0 in paper
+		weight = torch.where((timesteps == 0), 1.0, weight)
+		fit_noise_loss = weight * mse_loss  # ELBO loss
 
-		mse = self.mean_flat((x_start - model_output) ** 2)
+		user_modal_embs = torch.mm(model_output, model_feats)  # (batch, dim)
+		user_id_embs = torch.mm(x_start, i_embs)  # (batch, dim)
+		refact_ui_loss = self.MSELoss(user_modal_embs, user_id_embs)  # (batch)
 
-		weight = self.SNR(ts - 1) - self.SNR(ts)
-		weight = torch.where((ts == 0), 1.0, weight)
+		return fit_noise_loss, refact_ui_loss
 
-		diff_loss = weight * mse
+	def MSELoss(self, x_start: torch.Tensor, model_output: torch.Tensor):
+		"""
+		Compute the batch MSE loss between the origin view and denoised view.
 
-		usr_model_embeds = torch.mm(model_output, model_feats)
-		usr_id_embeds = torch.mm(x_start, itmEmbeds)
-
-		gc_loss = self.mean_flat((usr_model_embeds - usr_id_embeds) ** 2)
-
-		return diff_loss, gc_loss
-		
-	def mean_flat(self, tensor):
-		return tensor.mean(dim=list(range(1, len(tensor.shape))))
+		Returns:
+			torch.Tensor: (batch,)
+		"""
+		dim_except_batch = list(range(1, len(x_start.shape)))
+		mse = torch.mean((x_start - model_output) ** 2, dim=dim_except_batch)  # (batch, )
+		return mse
 	
-	def SNR(self, t):
-		self.alphas_cumprod = self.alphas_cumprod.cuda()
-		return self.alphas_cumprod[t] / (1 - self.alphas_cumprod[t])
+	def SNR(self, t: torch.Tensor) -> torch.Tensor:
+		"""Compute the Signal-to-Noise Ratio (SNR) at a given timestep."""
+		epsilon = 1e-8
+		return self.alphas_cumprod[t] / (1 - self.alphas_cumprod[t] + epsilon)
