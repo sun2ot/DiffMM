@@ -7,10 +7,10 @@ denoise_dim = "[1000]" # embedding size for denoise layer input/output
 d_emb_size = 10 # time embedding size for diffusion step
 
 # Transformation type: 0 = Project Matrix, 1 = Linear, 2 = allrecipes
-trans = 0
+trans = 1
 
 # Contrastive learning method: 0 = m vs m, 1 = m vs main
-cl_method = 0
+cl_method = 1
 
 # ------------------------------------------------------------
 
@@ -41,8 +41,8 @@ rebuild_k = 1 # Use top k (probabilities) items to rebuild UI matrix
 [train]
 lr = 0.001 # Learning rate
 batch = 1024 # Batch size
-tstBat = 256 # Number of users in a testing batch
-reg = 1e-5 # Weight decay regularizer
+test_batch = 256 # Number of users in a testing batch
+reg = 1e-4 # Weight decay regularizer
 epoch = 50 # Number of epochs
 tstEpoch = 1 # Number of epochs to test while training
 gnn_layer = 1 # Number of GNN layers

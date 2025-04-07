@@ -48,7 +48,7 @@ class HyperConfig:
 class TrainConfig:
     lr: float = 0.001
     batch: int = 1024
-    tstBat: int = 256
+    test_batch: int = 256
     reg: float = 1e-5
     epoch: int = 50
     tstEpoch: int = 1
@@ -73,6 +73,3 @@ def load_config(path: str) -> Config:
         hyper = HyperConfig(**raw_config.get("hyper", {})),
         train = TrainConfig(**raw_config.get("train", {})),
     )
-
-config = load_config('conf/test.toml')
-print("Load configuration file successfully👌")
