@@ -41,34 +41,22 @@ def contrastLoss(embeds1, embeds2, nodes, temp):
 
 def l2_reg_loss(reg: float, embeddings: list[Tensor], device: torch.device) -> Tensor:
     """
-    计算L2正则化损失
-
     Args:
-        reg (float): 正则化系数
-        embeddings (List[Tensor]): 需要进行正则化的张量列表
-    
-    Returns:
-        正则化损失的平均值，标量张量
+        reg (float): reg weight
+        embeddings (List[Tensor]): List of embeddings to be regularized
     """
     emb_loss = torch.tensor(0., device=device)
     for emb in embeddings:
-        # 计算每一个嵌入向量的L2范数，然后除以batch_size以减少其对损失函数的影响
-        # 累加到总的嵌入损失中
-        # emb_loss += torch.linalg.vector_norm(emb, ord=2)
-        # emb_loss += 1./2*torch.sum(emb**2)
-        emb_loss += torch.norm(emb, p=2).square()
+        emb_loss += torch.sum(emb**2)
     return emb_loss * reg
 
 
-def InfoNCE(batch_view1: torch.Tensor, batch_view2: torch.Tensor, idx: Tensor, temperature: float, b_cos: bool = True):
+def InfoNCE(batch_view1: Tensor, batch_view2: Tensor, idx: Tensor, temperature: float, b_cos: bool = True):
     """
-    计算InfoNCE损失函数
-
     Args:
-        view1 (torch.Tensor): Num x Dim
-        view2 (torch.Tensor): Num x Dim
-        temperature (float): 温度系数
-        b_cos (bool): 是否使用余弦相似度
+        view1 (Tensor): Num x Dim
+        view2 (Tensor): Num x Dim
+        b_cos (bool): Whether to use cosine similarity
 
     Returns:
         Average InfoNCE Loss
@@ -77,11 +65,8 @@ def InfoNCE(batch_view1: torch.Tensor, batch_view2: torch.Tensor, idx: Tensor, t
     batch_view2 = batch_view2[idx]
     if batch_view1.shape != batch_view2.shape:
         raise ValueError(f"InfoNCE expected the same shape for two views. But got view1.shape={batch_view1.shape} and view2.shape={batch_view2.shape}.")
-    # 如果使用余弦相似度，则先进行归一化
     if b_cos:
         batch_view1, batch_view2 = F.normalize(batch_view1, p=2, dim=1), F.normalize(batch_view2, p=2, dim=1)
-    # 计算正样本的分数，使用点积并除以温度参数
     pos_score = (batch_view1 @ batch_view2.T) / temperature
-    # 计算每个样本的分数
     score = torch.diag(F.log_softmax(pos_score, dim=1))
     return -score.mean()
