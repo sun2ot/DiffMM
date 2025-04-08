@@ -130,7 +130,6 @@ class TrainData(torch_dataset):
 	"""Train Dataset (with negative sampling func)"""
 	def __init__(self, coomat: coo_matrix, config: Config):
 		self.config = config
-		self.device = torch.device(f"cuda:{self.config.base.gpu}" if torch.cuda.is_available() else "cpu")
 		# coomat -> (user_num, item_num)
 		self.rows = coomat.row
 		self.cols = coomat.col
@@ -155,11 +154,7 @@ class TrainData(torch_dataset):
 
 	def __getitem__(self, idx):
 		"""idx -> (user, pos_item, neg_item)"""
-		return (
-			torch.tensor(self.rows[idx], dtype=torch.long, device=self.device),
-			torch.tensor(self.cols[idx], dtype=torch.long, device=self.device),
-			torch.tensor(self.negs[idx], dtype=torch.long, device=self.device)
-		)
+		return self.rows[idx], self.cols[idx], self.negs[idx]
 
 class TestData(torch_dataset):
 	def __init__(self, testMat: coo_matrix, trainMat: coo_matrix):

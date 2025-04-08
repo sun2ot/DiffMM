@@ -209,9 +209,9 @@ class Coach:
 		main_log.info('Joint training 🤝')
 		for i, batch_data in enumerate(self.handler.trainLoader):
 			users, pos_items, neg_items = batch_data
-			# users: Tensor = users.long().cuda()
-			# pos_items: Tensor = pos_items.long().cuda(self.device)
-			# neg_items: Tensor = neg_items.long().cuda(self.device)
+			users: Tensor = users.long().cuda(self.device)
+			pos_items: Tensor = pos_items.long().cuda(self.device)
+			neg_items: Tensor = neg_items.long().cuda(self.device)
 
 			self.opt.zero_grad()
 
@@ -227,7 +227,7 @@ class Coach:
 			bpr_loss = - (scoreDiff).sigmoid().log().sum() / self.config.train.batch
 			reg_loss = l2_reg_loss(self.config.train.reg, [self.model.u_embs, self.model.i_embs], self.device)
 			ep_rec_loss += bpr_loss.item()
-			ep_reg_loss += reg_loss.item()  #? reg_loss is too small, so output 0?
+			ep_reg_loss += reg_loss.item()
 
 
 			#* Modality view as the anchor
