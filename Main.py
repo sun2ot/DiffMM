@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor
 from torch.optim.adam import Adam
-from Utils.Log import main_log, olog
+from Utils.Log import main_log
 from Conf import load_config, Config
 from Model import Model, GaussianDiffusion, Denoise
 from DataHandler import DataHandler, DiffusionData
@@ -9,10 +9,8 @@ import numpy as np
 from Utils.Utils import *
 import os
 import random
-import setproctitle
 from scipy.sparse import coo_matrix, csr_matrix
 import ast
-from tqdm import tqdm
 import argparse
 
 class Coach:
@@ -267,6 +265,10 @@ class Coach:
 				cl_loss = main_cl_loss
 			else:
 				cl_loss = cross_modal_cl_loss
+			
+			#* 同时启用两种对比学习
+			cl_loss = main_cl_loss + cross_modal_cl_loss
+			# --------------------
 			ep_cl_loss += cl_loss.item()
 
 			batch_joint_loss =  bpr_loss + reg_loss + cl_loss
