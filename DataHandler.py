@@ -27,8 +27,8 @@ class DataHandler:
 		#* all datasets' file names are the same
 		self.predir = predir
 		#? train and test
-		self.trainfile = predir + 'trnMat_new.pkl'
-		self.testfile = predir + 'tstMat_new.pkl'
+		self.trainfile = predir + 'trnMat.pkl'
+		self.testfile = predir + 'tstMat.pkl'
 
 		self.imagefile = predir + 'image_feat.npy'
 		self.textfile = predir + 'text_feat.npy'
