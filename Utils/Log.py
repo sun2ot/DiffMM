@@ -2,35 +2,39 @@ import logging
 from datetime import datetime
 import os
 import sys
+from typing import Optional
 
-# create logger
-main_log = logging.getLogger("main")
-main_log.setLevel(logging.INFO)
-
-# file handler
-log_time = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-os.makedirs(f"logs", exist_ok=True)
-file_handler = logging.FileHandler(f"logs/{log_time}.log")
-file_formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%m/%d %H:%M:%S')
-file_handler.setFormatter(file_formatter)
-main_log.addHandler(file_handler)
-
-# stream handler
-console_handler = logging.StreamHandler()
-console_formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%m/%d %H:%M:%S')
-console_handler.setFormatter(console_formatter)
-main_log.addHandler(console_handler)
-
-def olog(message):
+class Log():
     """
-    Log a message to both the console and the file handler without duplicate console output.
+    A class to handle logging for the application.
     """
-    # Write to file handler
-    for handler in main_log.handlers:
-        if isinstance(handler, logging.FileHandler):
-            handler.emit(logging.LogRecord(
-                name="main", level=logging.INFO, pathname="", lineno=0, msg=message, args=None, exc_info=None
-            ))
-    
-    # Write to console with overwrite effect
-    print(f"\r{message}", end="")
+    # Shared file handler for all instances
+    _shared_file_handler = None
+
+    def __init__(self, log_name: str, file_name: Optional[str] = None):
+        """
+        Initialize the logger with file and console handlers.
+        """
+        self.logger = logging.getLogger(log_name)
+        self.logger.setLevel(logging.INFO)
+        os.makedirs("logs", exist_ok=True)
+
+        # Initialize shared file handler if not already done
+        if Log._shared_file_handler is None:
+            log_time = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+            if file_name is None:
+                file_name = "shared"
+            Log._shared_file_handler = logging.FileHandler(f"logs/{log_time}_{file_name}.log")
+            file_formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%m/%d %H:%M:%S')
+            Log._shared_file_handler.setFormatter(file_formatter)
+
+        self.logger.addHandler(Log._shared_file_handler)
+
+        # Stream handler
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%m/%d %H:%M:%S')
+        console_handler.setFormatter(console_formatter)
+        self.logger.addHandler(console_handler)
+
+    def info(self, message: str):
+        self.logger.info(message)

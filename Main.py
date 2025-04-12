@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor
 from torch.optim.adam import Adam
-from Utils.Log import main_log
+from Utils.Log import Log
 from Conf import load_config, Config
 from Model import Model, GaussianDiffusion, Denoise
 from DataHandler import DataHandler, DiffusionData
@@ -52,6 +52,7 @@ class Coach:
 					precisionMax = result['Precision']
 					bestEpoch = epoch
 				main_log.info(self.makePrint('🧪 Test', epoch, result))
+			main_log.info(f"Current best: Epoch: {bestEpoch}, Recall: {recallMax:.4f}, NDCG: {ndcgMax:.4f}, Precision: {precisionMax:.4f}")
 		main_log.info(f"Best epoch: {bestEpoch}, Recall: {recallMax:.4f}, NDCG: {ndcgMax:.4f}, Precision: {precisionMax:.4f}")
 
 	def prepareModel(self):
@@ -382,6 +383,7 @@ if __name__ == '__main__':
 
 	seed_it(config.base.seed)
 
+	main_log = Log('main', config.data.name)
 	main_log.info('Start')
 	data_handler = DataHandler(config)
 
