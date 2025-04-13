@@ -51,7 +51,6 @@ class Model(nn.Module):
 			self.modal_weight = nn.Parameter(torch.tensor([0.3333, 0.3333, 0.3333]))
 		else:
 			self.modal_weight = nn.Parameter(torch.tensor([0.5, 0.5]))
-		
 		self.softmax = nn.Softmax(dim=0)
 		self.dropout = nn.Dropout(p=0.1)
 		self.leakyrelu = nn.LeakyReLU(0.2)
@@ -181,7 +180,7 @@ class Model(nn.Module):
 		for gcn in self.layer:  # Eq.22
 			final_embs = gcn(adj, embs_list[-1])
 			embs_list.append(final_embs)
-		final_embs = sum(embs_list)
+		final_embs = torch.stack(embs_list).sum(dim=0)
 
 		final_embs = final_embs + self.config.hyper.residual_weight * F.normalize(modal_embs)
 
@@ -389,16 +388,20 @@ class GaussianDiffusion(nn.Module):
 			self.calculate_for_diffusion()
 
 	def get_betas(self):
-		"""Generate noise param (beta) for diffusion process."""
-		#todo: adaptive generation of beta?
+		"""自适应生成 Beta 噪声"""
 		start = self.noise_scale * self.noise_min
 		end = self.noise_scale * self.noise_max
 		variance = np.linspace(start, end, self.steps, dtype=np.float64)
+
+		# 自适应调整 Beta
 		alpha_bar = 1 - variance
 		betas = []
 		betas.append(1 - alpha_bar[0])
 		for i in range(1, self.steps):
-			betas.append(min(1 - alpha_bar[i] / alpha_bar[i-1], 0.999))
+			adaptive_factor = np.log(1 + i) / np.log(1 + self.steps)  # 自适应因子
+			beta = min(1 - alpha_bar[i] / alpha_bar[i-1], 0.999) * adaptive_factor
+			betas.append(beta)
+			# betas.append(min(1 - alpha_bar[i] / alpha_bar[i-1], 0.999))
 		return np.array(betas)
 
 	def calculate_for_diffusion(self):
@@ -531,6 +534,29 @@ class GaussianDiffusion(nn.Module):
 		
 		return model_mean, model_log_variance
 
+	def calculate_time_step_weights(self):
+		"""
+		Calculate weights for each time step based on SNR or other metrics.
+		Returns:
+			torch.Tensor: Weights for each time step (steps,).
+		"""
+		# 使用 SNR 作为时间步的重要性指标
+		snr = self.alphas_cumprod / (1 - self.alphas_cumprod + 1e-8)  # SNR
+		weights = torch.sqrt(snr)  # 对 SNR 取平方根，增强对高 SNR 时间步的偏好
+		return weights / weights.sum()  # 归一化为概率分布
+
+	def sample_timesteps(self, batch_size: int):
+		"""
+		Sample time steps for a batch using non-uniform sampling.
+		Args:
+			batch_size (int): Number of samples in the batch.
+		Returns:
+			torch.Tensor: Sampled time steps (batch_size,).
+		"""
+		weights = self.calculate_time_step_weights()  # 获取时间步的采样权重
+		timesteps = torch.multinomial(weights, batch_size, replacement=True)  # 根据权重采样
+		return timesteps
+
 	def training_losses(self, model: Denoise, x_start: torch.Tensor, i_embs: torch.Tensor, model_feats: torch.Tensor):
 		"""
 		Args:
@@ -543,7 +569,10 @@ class GaussianDiffusion(nn.Module):
 		"""
 		batch_size = x_start.size(0)
 
-		timesteps = torch.randint(0, self.steps, (batch_size,), device=self.device)
+		# 使用非均匀采样策略选择时间步
+		timesteps = self.sample_timesteps(batch_size)
+		# timesteps = torch.randint(0, self.steps, (batch_size,), device=self.device)
+
 		noise = torch.randn_like(x_start)
 		if self.noise_scale != 0:
 			# forward diffusion

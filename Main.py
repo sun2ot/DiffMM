@@ -412,7 +412,7 @@ if __name__ == '__main__':
 	args = parser.parse_args()
 	try:
 		config = load_config(args.config)
-		print("Load configuration file successfully👌")
+		print(f"Load configuration ({config.data.name}) file successfully👌")
 	except Exception as e:
 		print(f"Error loading configuration file: {e}")
 		exit(1)
