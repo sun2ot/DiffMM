@@ -6,6 +6,7 @@ import numpy as np
 import math
 from Utils.Utils import *
 from typing import Optional
+from dataclasses import dataclass
 
 init = nn.init.xavier_uniform_  # specific init func
 uniformInit = nn.init.uniform   # func factory
@@ -97,6 +98,10 @@ class Model(nn.Module):
 		Returns:
 			Tuple (Tensor, Tensor): (final_user_embs, final_item_embs)
 		"""
+
+		# @dataclass
+		# class GCNOut:
+
 
 		# Trans multimodal feats to 64 (latdim)
 		if self.config.base.trans == 0:
@@ -318,16 +323,17 @@ class Denoise(nn.Module):
 		self.init_weights()
 
 	def init_weights(self):
-		for layer in self.in_layers:
-			nn.init.xavier_normal_(layer.weight) # initialize weights using xavier normal distribution
-			nn.init.normal_(layer.bias, mean=0.0, std=0.001)  # bias initialized to normal distribution
-
-		for layer in self.out_layers:
+		def initialize_layer(layer):
+			"""Helper function to initialize weights and biases of a layer."""
 			nn.init.xavier_normal_(layer.weight)
-			nn.init.normal_(layer.bias, mean=0.0, std=0.001)
-
-		nn.init.xavier_normal_(self.emb_layer.weight)
-		nn.init.normal_(self.emb_layer.bias, mean=0.0, std=0.001)
+			if layer.bias is not None:  # Check if the layer has bias
+				nn.init.normal_(layer.bias, mean=0.0, std=0.001)
+		
+		for layer in self.in_layers:
+			initialize_layer(layer)
+		for layer in self.out_layers:
+			initialize_layer(layer)
+		initialize_layer(self.emb_layer)
 
 	def forward(self, x_t: torch.Tensor, timesteps: torch.Tensor, mess_dropout=True) -> torch.Tensor:
 		"""
@@ -487,7 +493,9 @@ class GaussianDiffusion(nn.Module):
 		if noise is None:
 			noise = torch.randn_like(x_start)
 		# x_t = \sqrt{\bar{α}_{t}} * x_0 + \sqrt{1-\bar{α}_{t}} * noise
-		return self._extract_into_tensor(self.sqrt_alphas_cumprod, timesteps, x_start.shape) * x_start + self._extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, timesteps, x_start.shape) * noise
+		x0_coef = self._extract_into_tensor(self.sqrt_alphas_cumprod, timesteps, x_start.shape)
+		noise_coef = self._extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, timesteps, x_start.shape)
+		return x0_coef * x_start + noise_coef * noise
 
 	def _extract_into_tensor(self, var: torch.Tensor, timesteps: torch.Tensor, broadcast_shape: torch.Size):
 		"""

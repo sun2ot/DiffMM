@@ -29,14 +29,25 @@ class Coach:
 			result_str += f"{metric}={val:.4f}, "
 		result_str = result_str[:-2] + '  ' #? del blank and `:`?
 		return result_str
+	
+	def need_update(self, l1: list, l2: list) -> bool:
+		"""
+		If the number of elements in l1 that are greater than l2 is strictly more than half (rounded up), return True.
+		"""
+		if len(l1) != len(l2):
+			raise ValueError("Result list shape should be the same!")
+
+		count_l1_greater = sum(1 for a, b in zip(l1, l2) if a > b)
+		half_length = (len(l1) + 1) // 2
+		return count_l1_greater >= half_length
 
 	def run(self):
 		self.prepareModel()
 		main_log.info('Model Initialized ✅')
 
-		recallMax = 0
-		ndcgMax = 0
-		precisionMax = 0
+		his_recall_max, recallMax = 0, 0
+		his_ndcg_max, ndcgMax = 0, 0
+		his_prec_max, precisionMax = 0, 0
 		bestEpoch = 0  #todo: early stop
 
 		main_log.info('Start training 🚀')
@@ -46,14 +57,19 @@ class Coach:
 			main_log.info(self.makePrint('⏩ Train', epoch, result))
 			if tstFlag:
 				result = self.testEpoch()
-				if (result['Recall'] > recallMax):
+				re_list = [result['Recall'], result['NDCG'], result['Precision']]
+				his_recall_max = max(his_recall_max, result['Recall'])
+				his_ndcg_max = max(his_ndcg_max, result['NDCG'])
+				his_prec_max = max(his_prec_max, result['Precision'])
+				if (self.need_update(re_list, [recallMax, ndcgMax, precisionMax])):
 					recallMax = result['Recall']
 					ndcgMax = result['NDCG']
 					precisionMax = result['Precision']
 					bestEpoch = epoch
 				main_log.info(self.makePrint('🧪 Test', epoch, result))
-			main_log.info(f"Current best: Epoch: {bestEpoch}, Recall: {recallMax:.4f}, NDCG: {ndcgMax:.4f}, Precision: {precisionMax:.4f}")
-		main_log.info(f"Best epoch: {bestEpoch}, Recall: {recallMax:.4f}, NDCG: {ndcgMax:.4f}, Precision: {precisionMax:.4f}")
+			main_log.info(f"💡 Current best: Epoch: {bestEpoch}, Recall: {recallMax:.4f}, NDCG: {ndcgMax:.4f}, Precision: {precisionMax:.4f}")
+		main_log.info(f"Best epoch: {bestEpoch}, Recall: {recallMax:.5f}, NDCG: {ndcgMax:.5f}, Precision: {precisionMax:.5f}")
+		main_log.info(f"Historical best: Recall: {his_recall_max:.5f}, NDCG: {his_ndcg_max:.5f}, Precision: {his_prec_max:.5f}")
 
 	def prepareModel(self):
 		"""Init DiffMM, Diffusion, Denoise Models"""
@@ -218,6 +234,7 @@ class Coach:
 				final_user_embs, final_item_embs = self.model.gcn_MM(self.handler.torchBiAdj, self.image_adj, self.text_adj, self.audio_adj)
 			else:
 				final_user_embs, final_item_embs = self.model.gcn_MM(self.handler.torchBiAdj, self.image_adj, self.text_adj)
+			
 			u_embs = final_user_embs[users]
 			pos_embs = final_item_embs[pos_items]
 			neg_embs = final_item_embs[neg_items]
@@ -225,8 +242,30 @@ class Coach:
 			scoreDiff = pairPredict(u_embs, pos_embs, neg_embs)
 			bpr_loss = - (scoreDiff).sigmoid().log().sum() / self.config.train.batch
 			reg_loss = l2_reg_loss(self.config.train.reg, [self.model.u_embs, self.model.i_embs], self.device)
+			# reg_loss = self.model.reg_loss() * self.config.train.reg
 			ep_rec_loss += bpr_loss.item()
 			ep_reg_loss += reg_loss.item()
+
+			#* Cross layer CL
+			joint_embs = torch.cat([self.model.u_embs, self.model.i_embs], dim=0)
+			all_embs = []
+			all_embs_cl = joint_embs
+			for k in range(3): # GCN Layers = 3
+				joint_embs = torch.sparse.mm(self.handler.torchBiAdj, joint_embs)
+				random_noise = torch.rand_like(joint_embs)
+				joint_embs += torch.sign(joint_embs) * F.normalize(random_noise) # noise scale
+				all_embs.append(joint_embs)
+				if k == 0: # which layer to CL
+					all_embs_cl = joint_embs
+			final_embs = torch.mean(torch.stack(all_embs), dim=0)
+			
+			cl1_user_embs = final_embs[:self.config.data.user_num]
+			cl1_item_embs = final_embs[self.config.data.user_num:]
+			cl2_user_embs = all_embs_cl[:self.config.data.user_num]
+			cl2_item_embs = all_embs_cl[self.config.data.user_num:]
+
+			#* Cross CL Loss
+			cross_cl_loss = (InfoNCE(cl1_user_embs, cl2_user_embs, users, self.config.hyper.temp) + InfoNCE(cl1_item_embs, cl2_item_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
 
 
 			#* Modality view as the anchor
@@ -238,19 +277,16 @@ class Coach:
 				cross_modal_cl_loss = (InfoNCE(u_image_embs, u_text_embs, users, self.config.hyper.temp) + InfoNCE(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
 				cross_modal_cl_loss += (InfoNCE(u_image_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(i_image_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
 				cross_modal_cl_loss += (InfoNCE(u_text_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(i_text_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
+				# cross_modal_cl_loss = (contrastLoss(u_image_embs, u_text_embs, users, self.config.hyper.temp) + contrastLoss(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
+				# cross_modal_cl_loss += (contrastLoss(u_image_embs, u_audio_embs, users, self.config.hyper.temp) + contrastLoss(i_image_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
+				# cross_modal_cl_loss += (contrastLoss(u_text_embs, u_audio_embs, users, self.config.hyper.temp) + contrastLoss(i_text_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
 			else:
 				result = self.model.gcn_MM_CL(self.handler.torchBiAdj, self.image_adj, self.text_adj)
 				assert len(result) == 4
 				u_image_embs, i_image_embs, u_text_embs, i_text_embs = result
 				# only one CL: image-text
 				cross_modal_cl_loss = (InfoNCE(u_image_embs, u_text_embs, users, self.config.hyper.temp) + InfoNCE(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
-			
-			# if self.config.data.name == 'tiktok':
-			# 	cl_loss = (contrastLoss(u_image_embs, u_text_embs, users, self.config.hyper.temp) + contrastLoss(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
-			# 	cl_loss += (contrastLoss(u_image_embs, u_audio_embs, users, self.config.hyper.temp) + contrastLoss(i_image_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg # type: ignore
-			# 	cl_loss += (contrastLoss(u_text_embs, u_audio_embs, users, self.config.hyper.temp) + contrastLoss(i_text_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg # type: ignore
-			# else:
-			# 	cl_loss = (contrastLoss(u_image_embs, u_text_embs, users, self.config.hyper.temp) + contrastLoss(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
+				# cross_modal_cl_loss = (contrastLoss(u_image_embs, u_text_embs, users, self.config.hyper.temp) + contrastLoss(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
 
 			#* Main view as the anchor
 			# main_cl_loss = (contrastLoss(final_user_embs, u_image_embs, users, self.config.hyper.temp) + contrastLoss(final_item_embs, i_image_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
@@ -262,13 +298,13 @@ class Coach:
 			if self.config.data.name == 'tiktok':
 				main_cl_loss += (InfoNCE(final_user_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg # type: ignore
 
-			if self.config.base.cl_method == 1: #! Only one of the two CL methods was used.
-				cl_loss = main_cl_loss
-			else:
-				cl_loss = cross_modal_cl_loss
+			# if self.config.base.cl_method == 1: #! Only one of the two CL methods was used.
+			# 	cl_loss = main_cl_loss
+			# else:
+			# 	cl_loss = cross_modal_cl_loss
 			
 			#* 同时启用两种对比学习
-			cl_loss = main_cl_loss + cross_modal_cl_loss
+			cl_loss = cross_modal_cl_loss + main_cl_loss + cross_cl_loss
 			# --------------------
 			ep_cl_loss += cl_loss.item()
 
@@ -307,8 +343,8 @@ class Coach:
 
 		for usr, trainMask in testLoader:
 			i += 1
-			usr: Tensor = usr.long().cuda()
-			trainMask: Tensor = trainMask.cuda()
+			usr: Tensor = usr.long().cuda(self.device)
+			trainMask: Tensor = trainMask.cuda(self.device)
 			# batch users' scores for all items -> (batch, dim) @ (dim, item) = (batch, item)
 			# 1-trainMask: reverse train mat (block train set) -> (batch_user, item)
 			# trainMase*1e-8: set the score of train items to minimum to ensure the top-k items will not be selected
