@@ -18,8 +18,8 @@ class Model(nn.Module):
 
 		self.config = config
 		self.device = torch.device(f"cuda:{self.config.base.gpu}" if torch.cuda.is_available() else "cpu")
-		self.u_embs = nn.Parameter(init(torch.empty(self.config.data.user_num, self.config.base.latdim)))
-		self.i_embs = nn.Parameter(init(torch.empty(self.config.data.item_num, self.config.base.latdim)))
+		self.u_embs = nn.Parameter(init(torch.empty(self.config.data.user_num, self.config.base.latdim))) # type: ignore
+		self.i_embs = nn.Parameter(init(torch.empty(self.config.data.item_num, self.config.base.latdim))) # type: ignore
 		self.layer = nn.Sequential(*[GCNLayer() for i in range(self.config.train.gnn_layer)])
 
 		self.edgeDropper = SpAdjDropEdge(self.config.hyper.keepRate)
@@ -28,16 +28,16 @@ class Model(nn.Module):
 			self.image_layer = nn.Linear(self.config.data.image_feat_dim, self.config.base.latdim)
 			self.text_layer = nn.Linear(self.config.data.text_feat_dim, self.config.base.latdim)
 		elif self.config.base.trans == 0:
-			self.image_matrix = nn.Parameter(init(torch.empty(size=(self.config.data.image_feat_dim, self.config.base.latdim))))
-			self.text_matrix = nn.Parameter(init(torch.empty(size=(self.config.data.text_feat_dim, self.config.base.latdim))))
+			self.image_matrix = nn.Parameter(init(torch.empty(size=(self.config.data.image_feat_dim, self.config.base.latdim)))) # type: ignore
+			self.text_matrix = nn.Parameter(init(torch.empty(size=(self.config.data.text_feat_dim, self.config.base.latdim)))) # type: ignore
 		else:  # self.config.base.trans == 2
-			self.image_matrix = nn.Parameter(init(torch.empty(size=(self.config.data.image_feat_dim, self.config.base.latdim))))
+			self.image_matrix = nn.Parameter(init(torch.empty(size=(self.config.data.image_feat_dim, self.config.base.latdim)))) # type: ignore
 			self.text_layer = nn.Linear(self.config.data.text_feat_dim, self.config.base.latdim)
 		if audio_embedding != None:
 			if self.config.base.trans == 1:
 				self.audio_layer = nn.Linear(self.config.data.audio_feat_dim, self.config.base.latdim)
 			else:
-				self.audio_matrix = nn.Parameter(init(torch.empty(size=(self.config.data.audio_feat_dim, self.config.base.latdim))))
+				self.audio_matrix = nn.Parameter(init(torch.empty(size=(self.config.data.audio_feat_dim, self.config.base.latdim)))) # type: ignore
 
 		self.image_embedding = image_embedding
 		self.text_embedding = text_embedding
@@ -48,9 +48,9 @@ class Model(nn.Module):
 		
 		# average weight
 		if audio_embedding != None:
-			self.modal_weight = nn.Parameter(torch.tensor([0.3333, 0.3333, 0.3333]))
+			self.modal_weight = nn.Parameter(torch.tensor([0.3333, 0.3333, 0.3333])) # type: ignore
 		else:
-			self.modal_weight = nn.Parameter(torch.tensor([0.5, 0.5]))
+			self.modal_weight = nn.Parameter(torch.tensor([0.5, 0.5])) # type: ignore
 		self.softmax = nn.Softmax(dim=0)
 		self.dropout = nn.Dropout(p=0.1)
 		self.leakyrelu = nn.LeakyReLU(0.2)
@@ -122,7 +122,7 @@ class Model(nn.Module):
 		else:
 			audio_feats = None
 
-		weight: nn.Parameter = self.softmax(self.modal_weight)
+		weight: nn.Parameter = self.softmax(self.modal_weight) # type: ignore
 
 		# image
 		# Eq.20 the third part
@@ -248,8 +248,8 @@ class Model(nn.Module):
 	def reg_loss(self):
 		"""calculate user and item embedding L2 reg loss"""
 		loss = 0
-		loss += self.u_embs.norm(2).square()
-		loss += self.i_embs.norm(2).square()
+		loss += self.u_embs.norm(2).square() # type: ignore
+		loss += self.i_embs.norm(2).square() # type: ignore
 		return loss
 
 class GCNLayer(nn.Module):
@@ -363,6 +363,7 @@ class Denoise(nn.Module):
 class GaussianDiffusion(nn.Module):
 	def __init__(self, config: Config, beta_fixed=True):
 		super(GaussianDiffusion, self).__init__()
+		self.config = config
 		self.device = torch.device(f"cuda:{config.base.gpu}" if torch.cuda.is_available() else "cpu")
 		self.noise_scale = config.hyper.noise_scale
 		self.noise_min = config.hyper.noise_min
@@ -458,17 +459,16 @@ class GaussianDiffusion(nn.Module):
 		
 		indices = list(range(self.steps))[::-1]  # reverse order
 
-		x0 = x_t # init
 		for i in indices:
-			timesteps = torch.tensor([i] * x_t.shape[0], device=self.device)  # (ttt...batch_size)
+			timesteps = torch.tensor([i] * x_t.shape[0], device=self.device) # Select the most probable time step
 			model_mean, model_log_variance = self.p_mean_variance(model, x_t, timesteps)
 			if sampling_noise:
 				noise = torch.randn_like(x_t)
 				nonzero_mask = ((timesteps!=0).float().view(-1, *([1]*(len(x_t.shape)-1))))
-				x0 = model_mean + nonzero_mask * torch.exp(0.5 * model_log_variance) * noise
+				x_t = model_mean + nonzero_mask * torch.exp(0.5 * model_log_variance) * noise
 			else:
-				x0 = model_mean
-		return x0
+				x_t = model_mean
+		return x_t
 
 	def forward_cal_xt(self, x_start: torch.Tensor, timesteps: torch.Tensor, noise: Optional[torch.Tensor] = None):
 		"""
@@ -580,7 +580,9 @@ class GaussianDiffusion(nn.Module):
 		user_id_embs = torch.mm(x_start, i_embs)  # (batch, dim)
 		refact_ui_loss = self.MSELoss(user_modal_embs, user_id_embs)  # (batch)
 
-		return fit_noise_loss, refact_ui_loss
+		# Combine losses
+		total_loss = fit_noise_loss.mean() + refact_ui_loss.mean() * self.config.hyper.e_loss
+		return total_loss
 
 	def MSELoss(self, x_start: torch.Tensor, model_output: torch.Tensor):
 		"""

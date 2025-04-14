@@ -116,13 +116,12 @@ class Coach:
 			image_feats = self.model.getImageFeats().detach()
 			text_feats = self.model.getTextFeats().detach()
 
-			image_fit_noise_loss, image_refact_ui_loss = self.diffusion_model.training_losses(self.image_denoise_model, batch_u_items, i_embs, image_feats)
-			text_fit_noise_loss, text_refact_ui_loss = self.diffusion_model.training_losses(self.text_denoise_model, batch_u_items, i_embs, text_feats)
-
-			loss_image = image_fit_noise_loss.mean() + image_refact_ui_loss.mean() * self.config.hyper.e_loss
-			loss_text = text_fit_noise_loss.mean() + text_refact_ui_loss.mean() * self.config.hyper.e_loss
-
+			batch_image_loss: Tensor = self.diffusion_model.training_losses(self.image_denoise_model, batch_u_items, i_embs, image_feats)
+			loss_image = batch_image_loss.mean()
 			image_diff_loss += loss_image.item()
+
+			batch_text_loss: Tensor = self.diffusion_model.training_losses(self.text_denoise_model, batch_u_items, i_embs, text_feats)
+			loss_text = batch_text_loss.mean()
 			text_diff_loss += loss_text.item()
 
 			# optimizer
@@ -134,8 +133,8 @@ class Coach:
 				assert audio_feats is not None
 				audio_feats = audio_feats.detach()
 				self.audio_denoise_opt.zero_grad()
-				audio_fit_noist_loss, audio_refact_ui_loss = self.diffusion_model.training_losses(self.audio_denoise_model, batch_u_items, i_embs, audio_feats)
-				loss_audio = audio_fit_noist_loss.mean() + audio_refact_ui_loss.mean() * self.config.hyper.e_loss
+				batch_audio_loss: Tensor = self.diffusion_model.training_losses(self.audio_denoise_model, batch_u_items, i_embs, audio_feats)
+				loss_audio = batch_audio_loss.mean()
 				audio_diff_loss += loss_audio.item()
 				batch_diff_loss = loss_image + loss_text + loss_audio
 			else:
@@ -208,14 +207,14 @@ class Coach:
 			i_list_image = np.array(i_list_image)
 			edge_list_image = np.array(edge_list_image)
 			self.image_adj = self.makeTorchAdj(u_list_image, i_list_image, edge_list_image)
-			# self.image_adj = self.model.edgeDropper(self.image_adj)
+			self.image_adj = self.model.edgeDropper(self.image_adj)
 
 			# text
 			u_list_text = np.array(u_list_text)
 			i_list_text = np.array(i_list_text)
 			edge_list_text = np.array(edge_list_text)
 			self.text_adj = self.makeTorchAdj(u_list_text, i_list_text, edge_list_text)
-			# self.text_adj = self.model.edgeDropper(self.text_adj)
+			self.text_adj = self.model.edgeDropper(self.text_adj)
 
 			if self.config.data.name == 'tiktok':
 				# audio
@@ -223,7 +222,7 @@ class Coach:
 				i_list_audio = np.array(i_list_audio)
 				edge_list_audio = np.array(edge_list_audio)
 				self.audio_adj = self.makeTorchAdj(u_list_audio, i_list_audio, edge_list_audio)
-				# self.audio_adj = self.model.edgeDropper(self.audio_adj)
+				self.audio_adj = self.model.edgeDropper(self.audio_adj)
 
 
 		main_log.info('Joint training 🤝')

@@ -16,6 +16,8 @@ We develop our codes in the following environment:
 - scipy==1.9.1
 - tqdm==4.67.1
 - setproctitle=1.2.2 
+- mkl==2024.0
+- toml==0.10.2
 
 ## 🎯 Experimental Results
 
