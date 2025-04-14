@@ -126,41 +126,29 @@ class Model(nn.Module):
 
 		# image
 		# Eq.20 the third part
-		image_adj_embs = torch.concat([self.u_embs, self.i_embs])  # (node, dim)
+		image_adj_embs = torch.concat([self.u_embs, F.normalize(image_feats)])  # (node, dim)
 		image_adj_embs = torch.sparse.mm(image_adj, image_adj_embs)  # (node, dim)
 
 		# Eq.20 the first part
-		image_aware_embs = torch.concat([self.u_embs, F.normalize(image_feats)])  # (node, dim)
+		image_aware_embs = torch.concat([self.u_embs, self.i_embs])  # (node, dim)
 		image_aware_embs = torch.sparse.mm(adj, image_aware_embs)  # (node, dim)
-
-		# Eq.20 the second part
-		horder_image_aware_embs = torch.concat([image_aware_embs[:self.config.data.user_num], self.i_embs])
-		horder_image_aware_embs = torch.sparse.mm(adj, horder_image_aware_embs)
-		image_aware_embs += horder_image_aware_embs
 		
 		# text
-		text_adj_embs = torch.concat([self.u_embs, self.i_embs])
+		text_adj_embs = torch.concat([self.u_embs, F.normalize(text_feats)])
 		text_adj_embs = torch.sparse.mm(text_adj, text_adj_embs)
 
-		text_aware_embs = torch.concat([self.u_embs, F.normalize(text_feats)])
+		text_aware_embs = torch.concat([self.u_embs, self.i_embs])
 		text_aware_embs = torch.sparse.mm(adj, text_aware_embs)
-
-		horder_text_aware_embs = torch.concat([text_aware_embs[:self.config.data.user_num], self.i_embs])
-		horder_text_aware_embs = torch.sparse.mm(adj, horder_text_aware_embs)
-		text_aware_embs += horder_text_aware_embs
 
 		# audio
 		if audio_adj != None:
-			audio_adj_embs = torch.concat([self.u_embs, self.i_embs])
+			assert audio_feats != None
+			audio_adj_embs = torch.concat([self.u_embs, F.normalize(audio_feats)])
 			audio_adj_embs = torch.sparse.mm(audio_adj, audio_adj_embs)
 
-			assert audio_feats != None
-			audio_aware_embs = torch.concat([self.u_embs, F.normalize(audio_feats)])
+			audio_aware_embs = torch.concat([self.u_embs, self.i_embs])
 			audio_aware_embs = torch.sparse.mm(adj, audio_aware_embs)
 
-			horder_audio_aware_embs = torch.concat([audio_aware_embs[:self.config.data.user_num], self.i_embs])
-			horder_audio_aware_embs = torch.sparse.mm(adj, horder_audio_aware_embs)
-			audio_aware_embs += horder_audio_aware_embs
 		else:
 			audio_adj_embs, audio_aware_embs = None, None
 
@@ -183,6 +171,7 @@ class Model(nn.Module):
 		final_embs = torch.stack(embs_list).sum(dim=0)
 
 		final_embs = final_embs + self.config.hyper.residual_weight * F.normalize(modal_embs)
+		# final_embs = final_embs + self.config.hyper.residual_weight * modal_embs
 
 		return final_embs[:self.config.data.user_num], final_embs[self.config.data.user_num:]
 

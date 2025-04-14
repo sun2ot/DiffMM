@@ -167,35 +167,40 @@ class Coach:
 				batch_u_idxs: Tensor = batch_data[1]
 				topk = self.config.hyper.rebuild_k
 
+				 # 根据用户的度数动态设置 topk
+				user_degrees = self.handler.getUserDegrees()
+				batch_user_degrees = user_degrees[batch_u_idxs.cpu().numpy()]  # 获取 batch 用户的度数
+				topk_values = np.minimum(batch_user_degrees, topk).astype(int)  # 每个用户的 topk 不超过其度数，并转为 int
+
 				# image (batch, item)
 				denoised_batch = self.diffusion_model.backward_steps(self.image_denoise_model, batch_u_items, self.config.hyper.sampling_steps, self.config.train.sampling_noise)
-				_u_topk_items, indices = torch.topk(denoised_batch, k=topk)  # (batch, k)
-
 				for i in range(batch_u_idxs.shape[0]):
-					for j in range(indices[i].shape[0]):
+					user_topk = topk_values[i]  # 当前用户的 topk
+					_u_topk_items, indices = torch.topk(denoised_batch[i], k=user_topk)  # (user, user_topk)
+					for j in range(indices.shape[0]):
 						u_list_image.append(int(batch_u_idxs[i].cpu().numpy()))
-						i_list_image.append(int(indices[i][j].cpu().numpy()))
+						i_list_image.append(int(indices[j].cpu().numpy()))
 						edge_list_image.append(1.0)
 
 				# text
 				denoised_batch = self.diffusion_model.backward_steps(self.text_denoise_model, batch_u_items, self.config.hyper.sampling_steps, self.config.train.sampling_noise)
-				_u_topk_items, indices = torch.topk(denoised_batch, k=self.config.hyper.rebuild_k)
-
 				for i in range(batch_u_idxs.shape[0]):
-					for j in range(indices[i].shape[0]): 
+					user_topk = topk_values[i]
+					_u_topk_items, indices = torch.topk(denoised_batch[i], k=user_topk)
+					for j in range(indices.shape[0]):
 						u_list_text.append(int(batch_u_idxs[i].cpu().numpy()))
-						i_list_text.append(int(indices[i][j].cpu().numpy()))
+						i_list_text.append(int(indices[j].cpu().numpy()))
 						edge_list_text.append(1.0)
 
 				if self.config.data.name == 'tiktok':
 					# audio
 					denoised_batch = self.diffusion_model.backward_steps(self.audio_denoise_model, batch_u_items, self.config.hyper.sampling_steps, self.config.train.sampling_noise)
-					_u_topk_items, indices = torch.topk(denoised_batch, k=self.config.hyper.rebuild_k)
-
 					for i in range(batch_u_idxs.shape[0]):
-						for j in range(indices[i].shape[0]): 
+						user_topk = topk_values[i]
+						_u_topk_items, indices = torch.topk(denoised_batch[i], k=user_topk)
+						for j in range(indices.shape[0]):
 							u_list_audio.append(int(batch_u_idxs[i].cpu().numpy()))
-							i_list_audio.append(int(indices[i][j].cpu().numpy()))
+							i_list_audio.append(int(indices[j].cpu().numpy()))
 							edge_list_audio.append(1.0)
 
 			# image
@@ -203,14 +208,14 @@ class Coach:
 			i_list_image = np.array(i_list_image)
 			edge_list_image = np.array(edge_list_image)
 			self.image_adj = self.makeTorchAdj(u_list_image, i_list_image, edge_list_image)
-			self.image_adj = self.model.edgeDropper(self.image_adj)
+			# self.image_adj = self.model.edgeDropper(self.image_adj)
 
 			# text
 			u_list_text = np.array(u_list_text)
 			i_list_text = np.array(i_list_text)
 			edge_list_text = np.array(edge_list_text)
 			self.text_adj = self.makeTorchAdj(u_list_text, i_list_text, edge_list_text)
-			self.text_adj = self.model.edgeDropper(self.text_adj)
+			# self.text_adj = self.model.edgeDropper(self.text_adj)
 
 			if self.config.data.name == 'tiktok':
 				# audio
@@ -218,7 +223,7 @@ class Coach:
 				i_list_audio = np.array(i_list_audio)
 				edge_list_audio = np.array(edge_list_audio)
 				self.audio_adj = self.makeTorchAdj(u_list_audio, i_list_audio, edge_list_audio)
-				self.audio_adj = self.model.edgeDropper(self.audio_adj)
+				# self.audio_adj = self.model.edgeDropper(self.audio_adj)
 
 
 		main_log.info('Joint training 🤝')
@@ -277,26 +282,18 @@ class Coach:
 				cross_modal_cl_loss = (InfoNCE(u_image_embs, u_text_embs, users, self.config.hyper.temp) + InfoNCE(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
 				cross_modal_cl_loss += (InfoNCE(u_image_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(i_image_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
 				cross_modal_cl_loss += (InfoNCE(u_text_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(i_text_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
-				# cross_modal_cl_loss = (contrastLoss(u_image_embs, u_text_embs, users, self.config.hyper.temp) + contrastLoss(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
-				# cross_modal_cl_loss += (contrastLoss(u_image_embs, u_audio_embs, users, self.config.hyper.temp) + contrastLoss(i_image_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
-				# cross_modal_cl_loss += (contrastLoss(u_text_embs, u_audio_embs, users, self.config.hyper.temp) + contrastLoss(i_text_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
 			else:
 				result = self.model.gcn_MM_CL(self.handler.torchBiAdj, self.image_adj, self.text_adj)
 				assert len(result) == 4
 				u_image_embs, i_image_embs, u_text_embs, i_text_embs = result
 				# only one CL: image-text
 				cross_modal_cl_loss = (InfoNCE(u_image_embs, u_text_embs, users, self.config.hyper.temp) + InfoNCE(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
-				# cross_modal_cl_loss = (contrastLoss(u_image_embs, u_text_embs, users, self.config.hyper.temp) + contrastLoss(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
 
 			#* Main view as the anchor
-			# main_cl_loss = (contrastLoss(final_user_embs, u_image_embs, users, self.config.hyper.temp) + contrastLoss(final_item_embs, i_image_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
-			# main_cl_loss += (contrastLoss(final_user_embs, u_text_embs, users, self.config.hyper.temp) + contrastLoss(final_item_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
+			# main_cl_loss = (InfoNCE(final_user_embs, u_image_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_image_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
+			# main_cl_loss += (InfoNCE(final_user_embs, u_text_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
 			# if self.config.data.name == 'tiktok':
-			# 	main_cl_loss += (contrastLoss(final_user_embs, u_audio_embs, users, self.config.hyper.temp) + contrastLoss(final_item_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg # type: ignore
-			main_cl_loss = (InfoNCE(final_user_embs, u_image_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_image_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
-			main_cl_loss += (InfoNCE(final_user_embs, u_text_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
-			if self.config.data.name == 'tiktok':
-				main_cl_loss += (InfoNCE(final_user_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg # type: ignore
+			# 	main_cl_loss += (InfoNCE(final_user_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg # type: ignore
 
 			# if self.config.base.cl_method == 1: #! Only one of the two CL methods was used.
 			# 	cl_loss = main_cl_loss
@@ -304,7 +301,7 @@ class Coach:
 			# 	cl_loss = cross_modal_cl_loss
 			
 			#* 同时启用两种对比学习
-			cl_loss = cross_modal_cl_loss + main_cl_loss + cross_cl_loss
+			cl_loss = cross_modal_cl_loss + cross_cl_loss
 			# --------------------
 			ep_cl_loss += cl_loss.item()
 
@@ -398,12 +395,12 @@ def seed_it(seed):
 	os.environ["PYTHONSEED"] = str(seed)
 	np.random.seed(seed)
 	torch.manual_seed(seed)
-	#torch.cuda.manual_seed(seed)  # if device is not cuda, this is ignored
-	#torch.cuda.manual_seed_all(seed)
+	torch.cuda.manual_seed(seed)  # if device is not cuda, this is ignored
+	torch.cuda.manual_seed_all(seed)
 	#? will deterministic conflict with benchmark?
-	torch.backends.cudnn.deterministic = True  # force cudnn to be deterministic
-	torch.backends.cudnn.benchmark = True  # enable cudnn auto-tuner to find the optimal set of algorithms for the hardware
-	torch.backends.cudnn.enabled = True
+	# torch.backends.cudnn.deterministic = True  # force cudnn to be deterministic
+	# torch.backends.cudnn.benchmark = True  # enable cudnn auto-tuner to find the optimal set of algorithms for the hardware
+	# torch.backends.cudnn.enabled = True
 	
 
 if __name__ == '__main__':
