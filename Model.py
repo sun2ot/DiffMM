@@ -215,27 +215,27 @@ class Model(nn.Module):
 			audio_aware_embs = None
 
 		image_modal_embs = image_aware_embs
-		image_embs_list = [image_modal_embs]
-		for gcn in self.layer:
-			image_modal_embs = gcn(adj, image_embs_list[-1])
-			image_embs_list.append(image_modal_embs)
-		image_modal_embs = torch.sum(torch.stack(image_embs_list), dim=0)
+		# image_embs_list = [image_modal_embs]
+		# for gcn in self.layer:
+		# 	image_modal_embs = gcn(adj, image_embs_list[-1])
+		# 	image_embs_list.append(image_modal_embs)
+		# image_modal_embs = torch.sum(torch.stack(image_embs_list), dim=0)
 
 		text_modal_embs = text_aware_embs
-		text_embs_list = [text_modal_embs]
-		for gcn in self.layer:
-			text_modal_embs = gcn(adj, text_embs_list[-1])
-			text_embs_list.append(text_modal_embs)
-		text_modal_embs = torch.sum(torch.stack(text_embs_list), dim=0)
+		# text_embs_list = [text_modal_embs]
+		# for gcn in self.layer:
+		# 	text_modal_embs = gcn(adj, text_embs_list[-1])
+		# 	text_embs_list.append(text_modal_embs)
+		# text_modal_embs = torch.sum(torch.stack(text_embs_list), dim=0)
 
 		if audio_adj != None:
 			assert audio_aware_embs != None
 			audio_modal_embs = audio_aware_embs
-			audio_embs_list = [audio_modal_embs]
-			for gcn in self.layer:
-				audio_modal_embs = gcn(adj, audio_embs_list[-1])
-				audio_embs_list.append(audio_modal_embs)
-			audio_modal_embs = torch.sum(torch.stack(audio_embs_list), dim=0)
+			# audio_embs_list = [audio_modal_embs]
+			# for gcn in self.layer:
+			# 	audio_modal_embs = gcn(adj, audio_embs_list[-1])
+			# 	audio_embs_list.append(audio_modal_embs)
+			# audio_modal_embs = torch.sum(torch.stack(audio_embs_list), dim=0)
 		else:
 			audio_modal_embs = None
 
@@ -310,6 +310,9 @@ class Denoise(nn.Module):
 		self.drop = nn.Dropout(dropout)
 		self.init_weights()
 
+		self.modal_emb_dim = config.base.latdim  # 单一模态特征维度
+		self.gate_layer = nn.Linear(self.modal_emb_dim, self.modal_emb_dim)  # 门控机制，输出与模态特征维度一致
+
 	def init_weights(self):
 		def initialize_layer(layer):
 			"""Helper function to initialize weights and biases of a layer."""
@@ -323,16 +326,17 @@ class Denoise(nn.Module):
 			initialize_layer(layer)
 		initialize_layer(self.emb_layer)
 
-	def forward(self, x_t: torch.Tensor, timesteps: torch.Tensor, mess_dropout=True) -> torch.Tensor:
+	def forward(self, x_t: torch.Tensor, timesteps: torch.Tensor, mess_dropout=True, modal_feat: Optional[Tensor] = None) -> torch.Tensor:
 		"""
 		Denoise Layer
 
 		Args:
-			x (torch.Tensor): batch_u_items, (batch_size, item_num)
-			timesteps (torch.Tensor): (batch_size)
+			x_t (torch.Tensor): batch_u_items, (batch, item)
+			timesteps (torch.Tensor): (batch,)
+			modal_feat (Tensor): 模态特征 (item_num, latdim)
 		
 		Returns:
-			h (torch.Tensor): denoised view (batch_size, item_num)
+			h (torch.Tensor): denoised view (batch, item)
 		"""
 		# Use Transformer Positional Encoding to get time embeddings
 		freqs = torch.exp(-math.log(10000) * torch.arange(start=0, end=self.time_emb_dim//2, dtype=torch.float32) / (self.time_emb_dim//2)).cuda(self.device) # size = (5)
@@ -341,14 +345,23 @@ class Denoise(nn.Module):
 		if self.time_emb_dim % 2:
 			# Force the last dimension is even (cat with zeros col)
 			time_emb = torch.cat([time_emb, torch.zeros_like(time_emb[:, :1])], dim=-1)
-		emb = self.emb_layer(time_emb)  # (batch, 10)
+		time_emb = self.emb_layer(time_emb)  # (batch, 10)
 
 		if self.norm:
 			x_t = F.normalize(x_t)
 		if mess_dropout:
 			x_t = self.drop(x_t)
+
+		if modal_feat is not None:
+			 # 将模态特征从 (item_num, latdim) 映射到 (item, latdim)
+			modal_feat_projected = torch.mm(x_t, modal_feat)  # (batch, latdim)
+
+			# 计算模态特征的动态调整
+			modal_weights = torch.sigmoid(self.gate_layer(modal_feat_projected))  # (batch, latdim)
+			modal_feats_adjusted = modal_feat_projected * modal_weights  # 动态调整模态特征
+			x_t = x_t + torch.mm(modal_feats_adjusted, modal_feat.T)  # 融合模态特征，映射回 (batch, item)
 		
-		h = torch.cat([x_t, emb], dim=-1)  # (batch, item_num+10)
+		h = torch.cat([x_t, time_emb], dim=-1)  # (batch, item_num+10)
 		for i, layer in enumerate(self.in_layers):
 			h = layer(h)
 			h = torch.tanh(h)  #? how about other activation functions?
@@ -358,7 +371,7 @@ class Denoise(nn.Module):
 				# not the last layer
 				h = torch.tanh(h)
 
-		return h  # (batch, item_num)
+		return h  # (batch, item)
 
 class GaussianDiffusion(nn.Module):
 	def __init__(self, config: Config, beta_fixed=True):
@@ -378,20 +391,16 @@ class GaussianDiffusion(nn.Module):
 			self.calculate_for_diffusion()
 
 	def get_betas(self):
-		"""自适应生成 Beta 噪声"""
 		start = self.noise_scale * self.noise_min
 		end = self.noise_scale * self.noise_max
 		variance = np.linspace(start, end, self.steps, dtype=np.float64)
 
-		# 自适应调整 Beta
 		alpha_bar = 1 - variance
 		betas = []
 		betas.append(1 - alpha_bar[0])
 		for i in range(1, self.steps):
-			adaptive_factor = np.log(1 + i) / np.log(1 + self.steps)  # 自适应因子
-			beta = min(1 - alpha_bar[i] / alpha_bar[i-1], 0.999) * adaptive_factor
+			beta = min(1 - alpha_bar[i] / alpha_bar[i-1], 0.999)
 			betas.append(beta)
-			# betas.append(min(1 - alpha_bar[i] / alpha_bar[i-1], 0.999))
 		return np.array(betas)
 
 	def calculate_for_diffusion(self):
@@ -546,43 +555,52 @@ class GaussianDiffusion(nn.Module):
 		timesteps = torch.multinomial(weights, batch_size, replacement=True)  # 根据权重采样
 		return timesteps
 
-	def training_losses(self, model: Denoise, x_start: torch.Tensor, i_embs: torch.Tensor, model_feats: torch.Tensor):
+	def training_losses(self, model: Denoise, x_start: torch.Tensor, i_embs: torch.Tensor, modal_feat: torch.Tensor):
 		"""
 		Args:
 			x_start: (batch, item)
 			i_embs: (item, dim)
-			model_feats: (item, dim)
+			modal_feat: (item_num, latdim)
 		
 		Returns:
-			tuple (Tensor, Tensor): (fit_noise_loss, refact_ui_loss): (batch, batch)
+			torch.Tensor: total_loss
 		"""
 		batch_size = x_start.size(0)
 
 		# 使用非均匀采样策略选择时间步
 		timesteps = self.sample_timesteps(batch_size)
-		# timesteps = torch.randint(0, self.steps, (batch_size,), device=self.device)
 
+		# 添加噪声
 		noise = torch.randn_like(x_start)
 		if self.noise_scale != 0:
-			# forward diffusion
-			x_t = self.forward_cal_xt(x_start, timesteps, noise)
+			x_t = self.forward_cal_xt(x_start, timesteps, noise)  # forward diffusion
 		else:
 			x_t = x_start
-		# backward diffusion (denoise)
-		model_output = model.forward(x_t, timesteps)
 
-		mse_loss = self.MSELoss(x_start, model_output)  # (batch)
+		# 去噪过程
+		model_output = model.forward(x_t, timesteps, modal_feat=modal_feat)  # (batch, item)
+
+		# 1. 重构损失 (Reconstruction Loss)
+		reconstruction_loss = F.mse_loss(model_output, x_start, reduction='none')  # (batch, item)
+		reconstruction_loss = reconstruction_loss.mean(dim=-1)  # (batch,)
 		weight = self.SNR(timesteps - 1) - self.SNR(timesteps)  # the \lambda_0 in paper
 		weight = torch.where((timesteps == 0), 1.0, weight)
-		fit_noise_loss = weight * mse_loss  # ELBO loss
+		reconstruction_loss = weight * reconstruction_loss  # (batch,)
 
-		user_modal_embs = torch.mm(model_output, model_feats)  # (batch, dim)
-		user_id_embs = torch.mm(x_start, i_embs)  # (batch, dim)
-		refact_ui_loss = self.MSELoss(user_modal_embs, user_id_embs)  # (batch)
+		# 2. 对比损失 (Contrastive Loss)
+		user_modal_embs = torch.mm(model_output, modal_feat)  # (batch, latdim)
+		user_id_embs = torch.mm(x_start, i_embs)  # (batch, latdim)
+		contrastive_loss = 1 - F.cosine_similarity(user_modal_embs, user_id_embs, dim=-1)  # (batch,)
 
-		# Combine losses
-		total_loss = fit_noise_loss.mean() + refact_ui_loss.mean() * self.config.hyper.e_loss
+		# 3. 正则化损失 (Regularization Loss)
+		reg_loss = l2_reg_loss(self.config.train.reg, [i_embs, modal_feat], self.device)  # 标量
+		reg_loss = reg_loss.expand(batch_size)  # (batch,)
+
+		# 4. 动态权重平衡
+		total_loss = reconstruction_loss + contrastive_loss * self.config.hyper.e_loss + reg_loss   # (batch,)
+
 		return total_loss
+	
 
 	def MSELoss(self, x_start: torch.Tensor, model_output: torch.Tensor):
 		"""
