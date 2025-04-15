@@ -70,3 +70,26 @@ def InfoNCE(batch_view1: Tensor, batch_view2: Tensor, idx: Tensor, temperature: 
     pos_score = (batch_view1 @ batch_view2.T) / temperature
     score = torch.diag(F.log_softmax(pos_score, dim=1))
     return -score.mean()
+
+
+def bpr_loss(user_emb, pos_item_emb, neg_item_embs):
+    """
+    计算Bayesian Personalized Ranking (BPR) 损失函数
+    
+    Args:
+        user_emb: 用户嵌入向量，形状为[batch_size, embedding_dim]
+        pos_item_emb: 正样本物品嵌入向量，形状为[batch_size, embedding_dim]
+        neg_item_emb: 负样本物品嵌入向量，形状为[batch_size, embedding_dim]
+    
+    Returns:
+        BPR损失的平均值，标量张量
+    """
+    # 计算用户对正样本的偏好分数
+    # torch.mul is element-wise multiplies
+    pos_score = torch.mul(user_emb, pos_item_emb).sum(dim=1)  # (batch_size)
+    # 计算用户对负样本的偏好分数
+    neg_score = torch.mul(user_emb, neg_item_embs).sum(dim=1)  # (batch_size)
+    # BPR损失: 对每个正样本，计算它与所有负样本的损失
+    loss = -torch.log(10e-6 + torch.sigmoid(pos_score - neg_score))  # (batch_size)
+    # 返回损失的均值
+    return torch.mean(loss)

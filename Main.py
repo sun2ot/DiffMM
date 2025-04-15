@@ -112,7 +112,7 @@ class Coach:
 			# batch: list(tensor), batch[0]: (batch_size, item_num), batch[1]: (batch_size, )
 			batch_u_items, batch_u_idxs = batch_data
 
-			i_embs = self.model.getItemEmbs().detach()
+			i_embs = self.model.getItemEmbs()
 			image_feats = self.model.getImageFeats().detach()
 			text_feats = self.model.getTextFeats().detach()
 
@@ -136,9 +136,19 @@ class Coach:
 				batch_audio_loss: Tensor = self.diffusion_model.training_losses(self.audio_denoise_model, batch_u_items, i_embs, audio_feats)
 				loss_audio = batch_audio_loss.mean()
 				audio_diff_loss += loss_audio.item()
-				batch_diff_loss = loss_image + loss_text + loss_audio
+
+				# Normalize the losses before summing
+				total_loss = loss_image.item() + loss_text.item() + loss_audio.item()
+				batch_diff_loss = (loss_image + loss_text + loss_audio)/total_loss
+				image_diff_loss /= total_loss
+				text_diff_loss /= total_loss
+				audio_diff_loss /= total_loss
 			else:
-				batch_diff_loss = loss_image + loss_text
+				# Normalize the losses before summing
+				total_loss = loss_image.item() + loss_text.item()
+				batch_diff_loss = (loss_image + loss_text)/total_loss
+				image_diff_loss /= total_loss
+				text_diff_loss /= total_loss
 
 			batch_diff_loss.backward()
 
@@ -169,7 +179,7 @@ class Coach:
 				 # 根据用户的度数动态设置 topk
 				user_degrees = self.handler.getUserDegrees()
 				batch_user_degrees = user_degrees[batch_u_idxs.cpu().numpy()]  # 获取 batch 用户的度数
-				topk_values = np.minimum(batch_user_degrees, topk).astype(int)  # 每个用户的 topk 不超过其度数，并转为 int
+				topk_values = batch_user_degrees.astype(int)  # 每个用户的 topk 不超过其度数，并转为 int
 
 				# image (batch, item)
 				denoised_batch = self.diffusion_model.backward_steps(self.image_denoise_model, batch_u_items, self.config.hyper.sampling_steps, self.config.train.sampling_noise)
@@ -207,14 +217,14 @@ class Coach:
 			i_list_image = np.array(i_list_image)
 			edge_list_image = np.array(edge_list_image)
 			self.image_adj = self.makeTorchAdj(u_list_image, i_list_image, edge_list_image)
-			self.image_adj = self.model.edgeDropper(self.image_adj)
+			# self.image_adj = self.model.edgeDropper(self.image_adj)
 
 			# text
 			u_list_text = np.array(u_list_text)
 			i_list_text = np.array(i_list_text)
 			edge_list_text = np.array(edge_list_text)
 			self.text_adj = self.makeTorchAdj(u_list_text, i_list_text, edge_list_text)
-			self.text_adj = self.model.edgeDropper(self.text_adj)
+			# self.text_adj = self.model.edgeDropper(self.text_adj)
 
 			if self.config.data.name == 'tiktok':
 				# audio
@@ -222,7 +232,7 @@ class Coach:
 				i_list_audio = np.array(i_list_audio)
 				edge_list_audio = np.array(edge_list_audio)
 				self.audio_adj = self.makeTorchAdj(u_list_audio, i_list_audio, edge_list_audio)
-				self.audio_adj = self.model.edgeDropper(self.audio_adj)
+				# self.audio_adj = self.model.edgeDropper(self.audio_adj)
 
 
 		main_log.info('Joint training 🤝')
@@ -231,8 +241,6 @@ class Coach:
 			users: Tensor = users.long().cuda(self.device)
 			pos_items: Tensor = pos_items.long().cuda(self.device)
 			neg_items: Tensor = neg_items.long().cuda(self.device)
-
-			self.opt.zero_grad()
 
 			if self.config.data.name == 'tiktok':
 				final_user_embs, final_item_embs = self.model.gcn_MM(self.handler.torchBiAdj, self.image_adj, self.text_adj, self.audio_adj)
@@ -243,11 +251,9 @@ class Coach:
 			pos_embs = final_item_embs[pos_items]
 			neg_embs = final_item_embs[neg_items]
 
-			scoreDiff = pairPredict(u_embs, pos_embs, neg_embs)
-			bpr_loss = - (scoreDiff).sigmoid().log().sum() / self.config.train.batch
+			rec_loss = bpr_loss(u_embs, pos_embs, neg_embs) #? bpr_loss: (batch_size, )
 			reg_loss = l2_reg_loss(self.config.train.reg, [self.model.u_embs, self.model.i_embs], self.device)
-			# reg_loss = self.model.reg_loss() * self.config.train.reg
-			ep_rec_loss += bpr_loss.item()
+			ep_rec_loss += rec_loss.item()
 			ep_reg_loss += reg_loss.item()
 
 			#* Cross layer CL
@@ -269,7 +275,7 @@ class Coach:
 			cl2_item_embs = all_embs_cl[self.config.data.user_num:]
 
 			#* Cross CL Loss
-			cross_cl_loss = (InfoNCE(cl1_user_embs, cl2_user_embs, users, self.config.hyper.temp) + InfoNCE(cl1_item_embs, cl2_item_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
+			cross_cl_loss = (InfoNCE(cl1_user_embs, cl2_user_embs, users, self.config.hyper.temp) + InfoNCE(cl1_item_embs, cl2_item_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.cross_cl_rate
 
 
 			#* Modality view as the anchor
@@ -278,21 +284,21 @@ class Coach:
 				assert len(result) == 6
 				u_image_embs, i_image_embs, u_text_embs, i_text_embs, u_audio_embs, i_audio_embs = result
 				# pairwise CL: image-text, image-audio, text-audio
-				cross_modal_cl_loss = (InfoNCE(u_image_embs, u_text_embs, users, self.config.hyper.temp) + InfoNCE(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
-				cross_modal_cl_loss += (InfoNCE(u_image_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(i_image_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
-				cross_modal_cl_loss += (InfoNCE(u_text_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(i_text_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
+				# cross_modal_cl_loss = (InfoNCE(u_image_embs, u_text_embs, users, self.config.hyper.temp) + InfoNCE(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.modal_cl_rate
+				# cross_modal_cl_loss += (InfoNCE(u_image_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(i_image_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.modal_cl_rate
+				# cross_modal_cl_loss += (InfoNCE(u_text_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(i_text_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.modal_cl_rate
 			else:
 				result = self.model.gcn_MM_CL(self.handler.torchBiAdj, self.image_adj, self.text_adj)
 				assert len(result) == 4
 				u_image_embs, i_image_embs, u_text_embs, i_text_embs = result
 				# only one CL: image-text
-				cross_modal_cl_loss = (InfoNCE(u_image_embs, u_text_embs, users, self.config.hyper.temp) + InfoNCE(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
+				# cross_modal_cl_loss = (InfoNCE(u_image_embs, u_text_embs, users, self.config.hyper.temp) + InfoNCE(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.modal_cl_rate
 
 			#* Main view as the anchor
-			# main_cl_loss = (InfoNCE(final_user_embs, u_image_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_image_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
-			# main_cl_loss += (InfoNCE(final_user_embs, u_text_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg
-			# if self.config.data.name == 'tiktok':
-			# 	main_cl_loss += (InfoNCE(final_user_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.ssl_reg # type: ignore
+			main_cl_loss = (InfoNCE(final_user_embs, u_image_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_image_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.modal_cl_rate
+			main_cl_loss += (InfoNCE(final_user_embs, u_text_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.modal_cl_rate
+			if self.config.data.name == 'tiktok':
+				main_cl_loss += (InfoNCE(final_user_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.modal_cl_rate # type: ignore
 
 			# if self.config.base.cl_method == 1: #! Only one of the two CL methods was used.
 			# 	cl_loss = main_cl_loss
@@ -300,28 +306,26 @@ class Coach:
 			# 	cl_loss = cross_modal_cl_loss
 			
 			#* 同时启用两种对比学习
-			cl_loss = cross_modal_cl_loss + cross_cl_loss
+			cl_loss = cross_cl_loss + main_cl_loss
 			# --------------------
 			ep_cl_loss += cl_loss.item()
 
-			batch_joint_loss =  bpr_loss + reg_loss + cl_loss
+			batch_joint_loss =  rec_loss + reg_loss + cl_loss
 			ep_loss += batch_joint_loss.item()
-
+			
+			self.opt.zero_grad()
 			batch_joint_loss.backward()
 			self.opt.step()
-
-			# if i == train_steps:
-			# 	print(f"bpr: {bpr_loss.item():.4f}, reg: {reg_loss.item():.4f}, cl: {cl_loss.item():.4f}")
 
 		result = dict()
 		result['Loss'] = ep_loss / train_steps
 		result['BPR Loss'] = ep_rec_loss / train_steps
 		result['reg loss'] = ep_reg_loss / train_steps
 		result['CL loss'] = ep_cl_loss / train_steps
-		result['Di image loss'] = image_diff_loss / diffusion_steps
-		result['Di text loss'] = text_diff_loss / diffusion_steps
+		result['image loss'] = image_diff_loss / diffusion_steps
+		result['text loss'] = text_diff_loss / diffusion_steps
 		if self.config.data.name == 'tiktok':
-			result['Di audio loss'] = audio_diff_loss / diffusion_steps
+			result['audio loss'] = audio_diff_loss / diffusion_steps
 		return result
 
 	def testEpoch(self):
