@@ -30,7 +30,8 @@ class DataConfig:
 @dataclass
 class HyperConfig:
     temp: float = 0.5
-    ssl_reg: float = 0.01
+    modal_cl_rate: float = 0.01
+    cross_cl_rate: float = 0.2
     keepRate: float = 0.5
     noise_scale: float = 0.1
     noise_min: float = 0.0001
