@@ -2,8 +2,8 @@
 latdim = 64 # Embedding size
 topk = 20
 gpu = "0"
-seed = 421 # Random seed
-denoise_dim = "[1000]" # embedding size for denoise layer input/output 
+seed = 114514 # Random seed
+denoise_dim = "[1024]" # embedding size for denoise layer input/output 
 d_emb_size = 10 # time embedding size for diffusion step
 
 # Transformation type: 0 = Project Matrix, 1 = Linear, 2 = allrecipes
@@ -20,8 +20,10 @@ name = "baby" # Dataset name
 # ------------------------------------------------------------
 
 [hyper] # Hyperparameters for the model
-temp = 0.5 # Temperature in contrastive learning
-ssl_reg = 0.1 # Weight for contrastive learning
+modal_cl_temp = 0.5 # Temperature in contrastive learning
+modal_cl_rate = 0.2 # Weight for contrastive learning
+cross_cl_temp = 0.2
+cross_cl_rate = 0.2
 keepRate = 1 # Ratio of edges to keep (baby 1)
 
 noise_scale = 0.1 # Noise scale
@@ -39,7 +41,7 @@ rebuild_k = 1 # Use top k (probabilities) items to rebuild UI matrix
 # ------------------------------------------------------------
 
 [train]
-lr = 0.001 # Learning rate
+lr = 0.01 # Learning rate
 batch = 1024 # Batch size
 test_batch = 256 # Number of users in a testing batch
 reg = 1e-5 # Weight decay regularizer
