@@ -129,7 +129,7 @@ class Coach:
 		main_log.info('Diffusion model training')
 		for i, batch_data in enumerate(self.handler.diffusionLoader):
 			# batch: list(tensor), batch[0]: (batch_size, item_num), batch[1]: (batch_size, )
-			batch_u_items, batch_u_idxs = batch_data
+			batch_u_items = batch_data[0]
 
 			i_embs = self.model.getItemEmbs()
 			image_feats = self.model.getImageFeats().detach()
@@ -183,79 +183,63 @@ class Coach:
 
 		main_log.info('Re-build multimodal UI matrix')
 		with torch.no_grad():
-			u_list_image = []
-			i_list_image = []
-			edge_list_image = []
-
-			u_list_text = []
-			i_list_text = []
-			edge_list_text = []
-
-			u_list_audio = []
-			i_list_audio = []
-			edge_list_audio = []
+			# every modal's u_list/i_list/edge_list for creating adjacency matrix
+			modality_names = ['image', 'text']
+			if self.config.data.name == 'tiktok':
+				modality_names.append('audio')
+			u_list_dict = {m: [] for m in modality_names}
+			i_list_dict = {m: [] for m in modality_names}
+			edge_list_dict = {m: [] for m in modality_names}
+			denoise_model_dict = {
+				'image': self.image_denoise_model,
+				'text': self.text_denoise_model,
+			}
+			if self.config.data.name == 'tiktok':
+				denoise_model_dict['audio'] = self.audio_denoise_model
 
 			for batch_data in self.handler.diffusionLoader:
 				batch_u_items: Tensor = batch_data[0]
-				batch_u_idxs: Tensor = batch_data[1]
-				topk = self.config.hyper.rebuild_k
+				batch_u_idxs: np.ndarray = batch_data[1].cpu().numpy()
 
-				 # 根据用户的度数动态设置 topk
 				user_degrees = self.handler.getUserDegrees()
-				batch_user_degrees = user_degrees[batch_u_idxs.cpu().numpy()]  # 获取 batch 用户的度数
-				topk_values = batch_user_degrees.astype(int)  # 每个用户的 topk 不超过其度数，并转为 int
+				topk_values = user_degrees[batch_u_idxs]
 
-				# image (batch, item)
-				denoised_batch = self.diffusion_model.backward_steps(self.image_denoise_model, batch_u_items, self.config.hyper.sampling_steps, self.config.train.sampling_noise)
-				for i in range(batch_u_idxs.shape[0]):
-					user_topk = topk_values[i]  # 当前用户的 topk
-					_u_topk_items, indices = torch.topk(denoised_batch[i], k=user_topk)  # (user, user_topk)
-					for j in range(indices.shape[0]):
-						u_list_image.append(int(batch_u_idxs[i].cpu().numpy()))
-						i_list_image.append(int(indices[j].cpu().numpy()))
-						edge_list_image.append(1.0)
-
-				# text
-				denoised_batch = self.diffusion_model.backward_steps(self.text_denoise_model, batch_u_items, self.config.hyper.sampling_steps, self.config.train.sampling_noise)
-				for i in range(batch_u_idxs.shape[0]):
-					user_topk = topk_values[i]
-					_u_topk_items, indices = torch.topk(denoised_batch[i], k=user_topk)
-					for j in range(indices.shape[0]):
-						u_list_text.append(int(batch_u_idxs[i].cpu().numpy()))
-						i_list_text.append(int(indices[j].cpu().numpy()))
-						edge_list_text.append(1.0)
-
-				if self.config.data.name == 'tiktok':
-					# audio
-					denoised_batch = self.diffusion_model.backward_steps(self.audio_denoise_model, batch_u_items, self.config.hyper.sampling_steps, self.config.train.sampling_noise)
+				for m in modality_names:
+					denoised_batch = self.diffusion_model.backward_steps(
+						denoise_model_dict[m],
+						batch_u_items,
+						self.config.hyper.sampling_steps,
+						self.config.train.sampling_noise
+					)
 					for i in range(batch_u_idxs.shape[0]):
 						user_topk = topk_values[i]
-						_u_topk_items, indices = torch.topk(denoised_batch[i], k=user_topk)
+						_, indices = torch.topk(denoised_batch[i], k=user_topk)  # (batch_size, topk)
 						for j in range(indices.shape[0]):
-							u_list_audio.append(int(batch_u_idxs[i].cpu().numpy()))
-							i_list_audio.append(int(indices[j].cpu().numpy()))
-							edge_list_audio.append(1.0)
+							u_list_dict[m].append(batch_u_idxs[i])
+							i_list_dict[m].append(int(indices[j]))
+							edge_list_dict[m].append(1.0)
 
-			# image
-			u_list_image = np.array(u_list_image)
-			i_list_image = np.array(i_list_image)
-			edge_list_image = np.array(edge_list_image)
-			self.image_adj = self.makeTorchAdj(u_list_image, i_list_image, edge_list_image)
+			# make torch sparse adjacency matrix
+			self.image_adj = self.makeTorchAdj(
+				np.array(u_list_dict['image']),
+				np.array(i_list_dict['image']),
+				np.array(edge_list_dict['image'])
+			)
 			# self.image_adj = self.model.edgeDropper(self.image_adj)
 
-			# text
-			u_list_text = np.array(u_list_text)
-			i_list_text = np.array(i_list_text)
-			edge_list_text = np.array(edge_list_text)
-			self.text_adj = self.makeTorchAdj(u_list_text, i_list_text, edge_list_text)
+			self.text_adj = self.makeTorchAdj(
+				np.array(u_list_dict['text']),
+				np.array(i_list_dict['text']),
+				np.array(edge_list_dict['text'])
+			)
 			# self.text_adj = self.model.edgeDropper(self.text_adj)
 
 			if self.config.data.name == 'tiktok':
-				# audio
-				u_list_audio = np.array(u_list_audio)
-				i_list_audio = np.array(i_list_audio)
-				edge_list_audio = np.array(edge_list_audio)
-				self.audio_adj = self.makeTorchAdj(u_list_audio, i_list_audio, edge_list_audio)
+				self.audio_adj = self.makeTorchAdj(
+					np.array(u_list_dict['audio']),
+					np.array(i_list_dict['audio']),
+					np.array(edge_list_dict['audio'])
+				)
 				# self.audio_adj = self.model.edgeDropper(self.audio_adj)
 
 

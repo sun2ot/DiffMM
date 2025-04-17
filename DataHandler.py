@@ -128,16 +128,16 @@ class DataHandler:
 		self.diffusionData = DiffusionData(torch.tensor(self.trainMat.A, dtype=torch.float, device=self.device), self.config) # .A == .toarray()
 		self.diffusionLoader: dataloader.DataLoader[DiffusionData] = dataloader.DataLoader(self.diffusionData, batch_size=self.config.train.batch, shuffle=True, num_workers=0)
 
-	def getUserDegrees(self):
+	def getUserDegrees(self) -> np.ndarray:
 		"""
 		统计每个用户节点的度数（每个用户节点和多少个项目存在交互）。
 
 		Returns:
-			np.ndarray: 每个用户的度数数组，长度为用户数量。
+			np.ndarray (int): 每个用户的度数数组，长度为用户数量。
 		"""
 		if not hasattr(self, 'trainMat'):
 			raise ValueError("Training matrix not loaded. Please call LoadData() first.")
-		user_degrees = np.asarray(self.trainMat.sum(axis=1)).squeeze()
+		user_degrees = np.asarray(self.trainMat.sum(axis=1), dtype=int).squeeze()
 		return user_degrees
 
 class TrainData(torch_dataset):
@@ -216,7 +216,7 @@ class DiffusionData(torch_dataset):
 				- index (torch.Tensor)
 		"""
 		item = self.data[index]
-		return item, torch.tensor(index, dtype=torch.long, device=self.device)
+		return item, index
 	
 	def __len__(self):
 		return len(self.data)
