@@ -2,7 +2,7 @@
 latdim = 64 # Embedding size
 topk = 20
 gpu = "0"
-seed = 114514 # Random seed
+seed = 999 # Random seed
 denoise_dim = "[1024]" # embedding size for denoise layer input/output 
 d_emb_size = 10 # time embedding size for diffusion step
 
@@ -32,7 +32,7 @@ noise_max = 0.02 # Maximum noise
 steps = 5 # Number of steps
 
 e_loss = 0.01 # Edge loss (baby 0.01)
-residual_weight = 0.5  # RIS lambda
+residual_weight = 0.2  # RIS lambda
 modal_adj_weight = 0.2
 
 sampling_steps = 5 # Initial sampling steps for the inverse diffusion process
@@ -41,7 +41,7 @@ rebuild_k = 1 # Use top k (probabilities) items to rebuild UI matrix
 # ------------------------------------------------------------
 
 [train]
-lr = 0.01 # Learning rate
+lr = 0.001 # Learning rate
 batch = 1024 # Batch size
 test_batch = 256 # Number of users in a testing batch
 reg = 1e-5 # Weight decay regularizer

@@ -1,6 +1,8 @@
 import torch
 import torch.nn.functional as F
 from torch import Tensor
+# from numba import jit
+import numpy as np
 
 def innerProduct(user_embs, item_embs) -> Tensor:
 	return torch.sum(user_embs * item_embs, dim=-1)
@@ -82,7 +84,7 @@ def bpr_loss(user_emb, pos_item_emb, neg_item_embs):
         neg_item_emb: 负样本物品嵌入向量，形状为[batch_size, embedding_dim]
     
     Returns:
-        BPR损失的平均值，标量张量
+        BPR损失的平均值, 标量张量
     """
     # 计算用户对正样本的偏好分数
     # torch.mul is element-wise multiplies

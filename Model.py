@@ -33,7 +33,7 @@ class Model(nn.Module):
 		else:  # self.config.base.trans == 2
 			self.image_matrix = nn.Parameter(init(torch.empty(size=(self.config.data.image_feat_dim, self.config.base.latdim)))) # type: ignore
 			self.text_layer = nn.Linear(self.config.data.text_feat_dim, self.config.base.latdim)
-		if audio_embedding != None:
+		if audio_embedding is not None:
 			if self.config.base.trans == 1:
 				self.audio_layer = nn.Linear(self.config.data.audio_feat_dim, self.config.base.latdim)
 			else:
@@ -41,17 +41,17 @@ class Model(nn.Module):
 
 		self.image_embedding = image_embedding
 		self.text_embedding = text_embedding
-		if audio_embedding != None:
+		if audio_embedding is not None:
 			self.audio_embedding = audio_embedding
 		else:
 			self.audio_embedding = None
 		
 		# average weight
-		if audio_embedding != None:
+		if audio_embedding is not None:
 			self.modal_weight = nn.Parameter(torch.tensor([0.3333, 0.3333, 0.3333])) # type: ignore
 		else:
 			self.modal_weight = nn.Parameter(torch.tensor([0.5, 0.5])) # type: ignore
-		self.softmax = nn.Softmax(dim=0)
+		self.softmax = nn.Softmax(dim=-1)
 		self.dropout = nn.Dropout(p=0.1)
 		self.leakyrelu = nn.LeakyReLU(0.2)
 				
@@ -75,8 +75,8 @@ class Model(nn.Module):
 		else:
 			return self.text_layer(self.text_embedding)
 
-	def getAudioFeats(self) -> None | torch.Tensor:
-		if self.audio_embedding == None:
+	def getAudioFeats(self) -> Optional[torch.Tensor]:
+		if self.audio_embedding is None:
 			return None
 		else:
 			if self.config.base.trans == 0:
@@ -98,11 +98,7 @@ class Model(nn.Module):
 			Tuple (Tensor, Tensor): (final_user_embs, final_item_embs)
 		"""
 
-		# @dataclass
-		# class GCNOut:
-
-
-		# Trans multimodal feats to 64 (latdim)
+		 # Trans multimodal feats to 64 (latdim)
 		if self.config.base.trans == 0:
 			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_matrix))
 			text_feats = self.leakyrelu(torch.mm(self.text_embedding, self.text_matrix))
@@ -113,9 +109,9 @@ class Model(nn.Module):
 			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_matrix))
 			text_feats = self.text_layer(self.text_embedding)
 
-		if audio_adj != None:
+		if audio_adj is not None:
 			if self.config.base.trans == 0:
-				assert self.audio_embedding != None
+				assert self.audio_embedding is not None
 				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_matrix))
 			else:
 				audio_feats = self.audio_layer(self.audio_embedding)
@@ -125,28 +121,26 @@ class Model(nn.Module):
 		weight: nn.Parameter = self.softmax(self.modal_weight) # type: ignore
 
 		# image
-		# Eq.20 the third part
-		image_adj_embs = torch.concat([self.u_embs, F.normalize(image_feats)])  # (node, dim)
+		image_adj_embs = torch.cat([self.u_embs, F.normalize(image_feats)])  # (node, dim)
 		image_adj_embs = torch.sparse.mm(image_adj, image_adj_embs)  # (node, dim)
 
-		# Eq.20 the first part
-		image_aware_embs = torch.concat([self.u_embs, self.i_embs])  # (node, dim)
+		image_aware_embs = torch.cat([self.u_embs, self.i_embs])  # (node, dim)
 		image_aware_embs = torch.sparse.mm(adj, image_aware_embs)  # (node, dim)
 		
 		# text
-		text_adj_embs = torch.concat([self.u_embs, F.normalize(text_feats)])
+		text_adj_embs = torch.cat([self.u_embs, F.normalize(text_feats)])
 		text_adj_embs = torch.sparse.mm(text_adj, text_adj_embs)
 
-		text_aware_embs = torch.concat([self.u_embs, self.i_embs])
+		text_aware_embs = torch.cat([self.u_embs, self.i_embs])
 		text_aware_embs = torch.sparse.mm(adj, text_aware_embs)
 
 		# audio
-		if audio_adj != None:
-			assert audio_feats != None
-			audio_adj_embs = torch.concat([self.u_embs, F.normalize(audio_feats)])
+		if audio_adj is not None:
+			assert audio_feats is not None
+			audio_adj_embs = torch.cat([self.u_embs, F.normalize(audio_feats)])
 			audio_adj_embs = torch.sparse.mm(audio_adj, audio_adj_embs)
 
-			audio_aware_embs = torch.concat([self.u_embs, self.i_embs])
+			audio_aware_embs = torch.cat([self.u_embs, self.i_embs])
 			audio_aware_embs = torch.sparse.mm(adj, audio_aware_embs)
 
 		else:
@@ -154,25 +148,23 @@ class Model(nn.Module):
 
 		image_aware_embs += self.config.hyper.modal_adj_weight * image_adj_embs
 		text_aware_embs += self.config.hyper.modal_adj_weight * text_adj_embs
-		if audio_adj != None:
-			assert audio_adj_embs != None
+		if audio_adj is not None:
+			assert audio_adj_embs is not None
 			audio_aware_embs += self.config.hyper.modal_adj_weight * audio_adj_embs
 		
-		if audio_adj == None:
+		if audio_adj is None:
 			modal_embs = weight[0] * image_aware_embs + weight[1] * text_aware_embs
 		else:
 			modal_embs = weight[0] * image_aware_embs + weight[1] * text_aware_embs + weight[2] * audio_aware_embs
 
 		final_embs = modal_embs
 		embs_list = [final_embs]
-		# for gcn in self.layer:  # Eq.22
-			# final_embs = gcn(adj, embs_list[-1])
-		for i in range(1):
-			final_embs = torch.sparse.mm(adj, embs_list[-1])
-			embs_list.append(final_embs)
+		# 只做一层GCN
+		final_embs = torch.sparse.mm(adj, embs_list[-1])
+		embs_list.append(final_embs)
 		final_embs = torch.stack(embs_list).sum(dim=0)
 
-		# final_embs = final_embs + self.config.hyper.residual_weight * F.normalize(modal_embs)
+# final_embs = final_embs + self.config.hyper.residual_weight * F.normalize(modal_embs)
 		final_embs = final_embs + self.config.hyper.residual_weight * modal_embs
 
 		return final_embs[:self.config.data.user_num], final_embs[self.config.data.user_num:]
@@ -194,24 +186,24 @@ class Model(nn.Module):
 			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_matrix))
 			text_feats = self.text_layer(self.text_embedding)
 
-		if audio_adj != None:
+		if audio_adj is not None:
 			if self.config.base.trans == 0:
-				assert self.audio_embedding != None
+				assert self.audio_embedding is not None
 				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_matrix))
 			else:
 				audio_feats = self.audio_layer(self.audio_embedding)
 		else:
 			audio_feats = None
 
-		image_aware_embs = torch.concat([self.u_embs, F.normalize(image_feats)])
+		image_aware_embs = torch.cat([self.u_embs, F.normalize(image_feats)])
 		image_aware_embs = torch.sparse.mm(image_adj, image_aware_embs)
 
-		text_aware_embs = torch.concat([self.u_embs, F.normalize(text_feats)])
+		text_aware_embs = torch.cat([self.u_embs, F.normalize(text_feats)])
 		text_aware_embs = torch.sparse.mm(text_adj, text_aware_embs)
 
-		if audio_adj != None:
-			assert audio_feats != None
-			audio_aware_embs = torch.concat([self.u_embs, F.normalize(audio_feats)])
+		if audio_adj is not None:
+			assert audio_feats is not None
+			audio_aware_embs = torch.cat([self.u_embs, F.normalize(audio_feats)])
 			audio_aware_embs = torch.sparse.mm(audio_adj, audio_aware_embs)
 		else:
 			audio_aware_embs = None
@@ -219,16 +211,16 @@ class Model(nn.Module):
 		image_modal_embs = image_aware_embs
 		text_modal_embs = text_aware_embs
 
-		if audio_adj != None:
-			assert audio_aware_embs != None
+		if audio_adj is not None:
+			assert audio_aware_embs is not None
 			audio_modal_embs = audio_aware_embs
 		else:
 			audio_modal_embs = None
 
-		if audio_adj == None:
+		if audio_adj is None:
 			return image_modal_embs[:self.config.data.user_num], image_modal_embs[self.config.data.user_num:], text_modal_embs[:self.config.data.user_num], text_modal_embs[self.config.data.user_num:]
 		else:
-			assert audio_modal_embs != None
+			assert audio_modal_embs is not None
 			return image_modal_embs[:self.config.data.user_num], image_modal_embs[self.config.data.user_num:], text_modal_embs[:self.config.data.user_num], text_modal_embs[self.config.data.user_num:], audio_modal_embs[:self.config.data.user_num], audio_modal_embs[self.config.data.user_num:]
 
 	def reg_loss(self):
@@ -325,7 +317,7 @@ class Denoise(nn.Module):
 			h (torch.Tensor): denoised view (batch, item)
 		"""
 		# Use Transformer Positional Encoding to get time embeddings
-		freqs = torch.exp(-math.log(10000) * torch.arange(start=0, end=self.time_emb_dim//2, dtype=torch.float32) / (self.time_emb_dim//2)).cuda(self.device) # size = (5)
+		freqs = torch.exp(-math.log(10000) * torch.arange(start=0, end=self.time_emb_dim//2, dtype=torch.float32).to(self.device) / (self.time_emb_dim//2))
 		temp = timesteps.unsqueeze(-1).float() * freqs.unsqueeze(0)  # (batch, 5)
 		time_emb = torch.cat([torch.cos(temp), torch.sin(temp)], dim=-1)  # (batch, 10)
 		if self.time_emb_dim % 2:
@@ -339,13 +331,10 @@ class Denoise(nn.Module):
 			x_t = self.drop(x_t)
 
 		if modal_feat is not None:
-			 # 将模态特征从 (item_num, latdim) 映射到 (item, latdim)
 			modal_feat_projected = torch.mm(x_t, modal_feat)  # (batch, latdim)
-
-			# 计算模态特征的动态调整
 			modal_weights = torch.sigmoid(self.gate_layer(modal_feat_projected))  # (batch, latdim)
-			modal_feats_adjusted = modal_feat_projected * modal_weights  # 动态调整模态特征
-			x_t = x_t + torch.mm(modal_feats_adjusted, modal_feat.T)  # 融合模态特征，映射回 (batch, item)
+			modal_feats_adjusted = modal_feat_projected * modal_weights
+			x_t = x_t + torch.mm(modal_feats_adjusted, modal_feat.T)
 		
 		h = torch.cat([x_t, time_emb], dim=-1)  # (batch, item_num+10)
 		for i, layer in enumerate(self.in_layers):
@@ -493,7 +482,7 @@ class GaussianDiffusion(nn.Module):
 			timesteps (torch.Tensor): (ttt...batch)
 			broadcast_shape (torch.Size): (batch, item)
 		"""
-		res = var[timesteps].float() #? .float() is necessary?
+		res = var[timesteps].float()
 		while len(res.shape) < len(broadcast_shape):
 			res = res.unsqueeze(-1)
 		return res.expand(broadcast_shape)
@@ -569,13 +558,15 @@ class GaussianDiffusion(nn.Module):
 		# 1. 重构损失 (Reconstruction Loss)
 		reconstruction_loss = F.mse_loss(model_output, x_start, reduction='none')  # (batch, item)
 		reconstruction_loss = reconstruction_loss.mean(dim=-1)  # (batch,)
-		weight = self.SNR(timesteps - 1) - self.SNR(timesteps)  # the \lambda_0 in paper
-		weight = torch.where((timesteps == 0), 1.0, weight)
+		# 防止timesteps-1为负
+		timesteps_minus1 = torch.clamp(timesteps - 1, min=0)
+		weight = self.SNR(timesteps_minus1) - self.SNR(timesteps)  # the \lambda_0 in paper
+		weight = torch.where((timesteps == 0), torch.tensor(1.0, device=weight.device), weight)
 		reconstruction_loss = weight * reconstruction_loss  # (batch,)
 
 		# 2. 对比损失 (Contrastive Loss)
-		user_modal_embs = torch.mm(model_output, modal_feat)  # (batch, latdim)
-		user_id_embs = torch.mm(x_start, i_embs)  # (batch, latdim)
+		user_modal_embs = torch.sparse.mm(model_output, modal_feat)  # (batch, latdim)
+		user_id_embs = torch.sparse.mm(x_start, i_embs)  # (batch, latdim)
 		contrastive_loss = 1 - F.cosine_similarity(user_modal_embs, user_id_embs, dim=-1)  # (batch,)
 
 		# 3. 正则化损失 (Regularization Loss)
