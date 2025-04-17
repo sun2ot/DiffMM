@@ -165,13 +165,15 @@ class Model(nn.Module):
 
 		final_embs = modal_embs
 		embs_list = [final_embs]
-		for gcn in self.layer:  # Eq.22
-			final_embs = gcn(adj, embs_list[-1])
+		# for gcn in self.layer:  # Eq.22
+			# final_embs = gcn(adj, embs_list[-1])
+		for i in range(1):
+			final_embs = torch.sparse.mm(adj, embs_list[-1])
 			embs_list.append(final_embs)
 		final_embs = torch.stack(embs_list).sum(dim=0)
 
-		final_embs = final_embs + self.config.hyper.residual_weight * F.normalize(modal_embs)
-		# final_embs = final_embs + self.config.hyper.residual_weight * modal_embs
+		# final_embs = final_embs + self.config.hyper.residual_weight * F.normalize(modal_embs)
+		final_embs = final_embs + self.config.hyper.residual_weight * modal_embs
 
 		return final_embs[:self.config.data.user_num], final_embs[self.config.data.user_num:]
 
@@ -215,27 +217,11 @@ class Model(nn.Module):
 			audio_aware_embs = None
 
 		image_modal_embs = image_aware_embs
-		# image_embs_list = [image_modal_embs]
-		# for gcn in self.layer:
-		# 	image_modal_embs = gcn(adj, image_embs_list[-1])
-		# 	image_embs_list.append(image_modal_embs)
-		# image_modal_embs = torch.sum(torch.stack(image_embs_list), dim=0)
-
 		text_modal_embs = text_aware_embs
-		# text_embs_list = [text_modal_embs]
-		# for gcn in self.layer:
-		# 	text_modal_embs = gcn(adj, text_embs_list[-1])
-		# 	text_embs_list.append(text_modal_embs)
-		# text_modal_embs = torch.sum(torch.stack(text_embs_list), dim=0)
 
 		if audio_adj != None:
 			assert audio_aware_embs != None
 			audio_modal_embs = audio_aware_embs
-			# audio_embs_list = [audio_modal_embs]
-			# for gcn in self.layer:
-			# 	audio_modal_embs = gcn(adj, audio_embs_list[-1])
-			# 	audio_embs_list.append(audio_modal_embs)
-			# audio_modal_embs = torch.sum(torch.stack(audio_embs_list), dim=0)
 		else:
 			audio_modal_embs = None
 
@@ -326,7 +312,7 @@ class Denoise(nn.Module):
 			initialize_layer(layer)
 		initialize_layer(self.emb_layer)
 
-	def forward(self, x_t: torch.Tensor, timesteps: torch.Tensor, mess_dropout=True, modal_feat: Optional[Tensor] = None) -> torch.Tensor:
+	def forward(self, x_t: torch.Tensor, timesteps: torch.Tensor, mess_dropout=False, modal_feat: Optional[Tensor] = None) -> torch.Tensor:
 		"""
 		Denoise Layer
 
@@ -364,7 +350,7 @@ class Denoise(nn.Module):
 		h = torch.cat([x_t, time_emb], dim=-1)  # (batch, item_num+10)
 		for i, layer in enumerate(self.in_layers):
 			h = layer(h)
-			h = torch.tanh(h)  #? how about other activation functions?
+			h = torch.tanh(h)
 		for i, layer in enumerate(self.out_layers):
 			h = layer(h)
 			if i != len(self.out_layers) - 1:
@@ -492,7 +478,7 @@ class GaussianDiffusion(nn.Module):
 			torch.Tensor: Forward diffusion process x_t.
 		"""
 		if noise is None:
-			noise = torch.randn_like(x_start)
+			noise = torch.sign(x_start) * F.normalize(torch.randn_like(x_start))
 		# x_t = \sqrt{\bar{α}_{t}} * x_0 + \sqrt{1-\bar{α}_{t}} * noise
 		x0_coef = self._extract_into_tensor(self.sqrt_alphas_cumprod, timesteps, x_start.shape)
 		noise_coef = self._extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, timesteps, x_start.shape)

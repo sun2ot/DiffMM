@@ -1,6 +1,7 @@
 import torch
 from torch import Tensor
 from torch.optim.adam import Adam
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from Utils.Log import Log
 from Conf import load_config, Config
 from Model import Model, GaussianDiffusion, Denoise
@@ -51,25 +52,38 @@ class Coach:
 		bestEpoch = 0  #todo: early stop
 
 		main_log.info('Start training 🚀')
-		for epoch in range(0, self.config.train.epoch):
-			tstFlag = (epoch % self.config.train.tstEpoch == 0) #? always be True?
-			result = self.trainEpoch()
-			main_log.info(self.makePrint('⏩ Train', epoch, result))
-			if tstFlag:
-				result = self.testEpoch()
-				re_list = [result['Recall'], result['NDCG'], result['Precision']]
-				his_recall_max = max(his_recall_max, result['Recall'])
-				his_ndcg_max = max(his_ndcg_max, result['NDCG'])
-				his_prec_max = max(his_prec_max, result['Precision'])
-				if (self.need_update(re_list, [recallMax, ndcgMax, precisionMax])):
-					recallMax = result['Recall']
-					ndcgMax = result['NDCG']
-					precisionMax = result['Precision']
-					bestEpoch = epoch
-				main_log.info(self.makePrint('🧪 Test', epoch, result))
+		try:
+			for epoch in range(0, self.config.train.epoch):
+				tstFlag = (epoch % self.config.train.tstEpoch == 0) #? always be True?
+				result = self.trainEpoch()
+
+				self.model_scheduler.step()
+				self.image_scheduler.step()
+				self.text_scheduler.step()
+				if self.config.data.name == 'tiktok':
+					self.audio_scheduler.step()
+				
+				main_log.info(self.makePrint('⏩ Train', epoch, result))
+				if tstFlag:
+					result = self.testEpoch()
+					re_list = [result['Recall'], result['NDCG'], result['Precision']]
+					his_recall_max = max(his_recall_max, result['Recall'])
+					his_ndcg_max = max(his_ndcg_max, result['NDCG'])
+					his_prec_max = max(his_prec_max, result['Precision'])
+					if (self.need_update(re_list, [recallMax, ndcgMax, precisionMax])):
+						recallMax = result['Recall']
+						ndcgMax = result['NDCG']
+						precisionMax = result['Precision']
+						bestEpoch = epoch
+					main_log.info(self.makePrint('🧪 Test', epoch, result))
+				main_log.info(f"💡 Current best: Epoch: {bestEpoch}, Recall: {recallMax:.4f}, NDCG: {ndcgMax:.4f}, Precision: {precisionMax:.4f}")
+			main_log.info(f"Best epoch: {bestEpoch}, Recall: {recallMax:.5f}, NDCG: {ndcgMax:.5f}, Precision: {precisionMax:.5f}")
+			main_log.info(f"Historical best: Recall: {his_recall_max:.5f}, NDCG: {his_ndcg_max:.5f}, Precision: {his_prec_max:.5f}")
+		except KeyboardInterrupt:
+			main_log.info('🈲 Training interrupted by user!')
 			main_log.info(f"💡 Current best: Epoch: {bestEpoch}, Recall: {recallMax:.4f}, NDCG: {ndcgMax:.4f}, Precision: {precisionMax:.4f}")
-		main_log.info(f"Best epoch: {bestEpoch}, Recall: {recallMax:.5f}, NDCG: {ndcgMax:.5f}, Precision: {precisionMax:.5f}")
-		main_log.info(f"Historical best: Recall: {his_recall_max:.5f}, NDCG: {his_ndcg_max:.5f}, Precision: {his_prec_max:.5f}")
+			main_log.info(f"Historical best: Recall: {his_recall_max:.5f}, NDCG: {his_ndcg_max:.5f}, Precision: {his_prec_max:.5f}")
+
 
 	def prepareModel(self):
 		"""Init DiffMM, Diffusion, Denoise Models"""
@@ -79,6 +93,7 @@ class Coach:
 			self.model = Model(self.config, self.handler.image_feats.detach(), self.handler.text_feats.detach()).cuda(self.device)
 
 		self.opt = Adam(self.model.parameters(), lr=self.config.train.lr, weight_decay=0)
+		self.model_scheduler = CosineAnnealingWarmRestarts(self.opt, T_0=10, T_mult=1, eta_min=1e-4)
 
 		self.diffusion_model = GaussianDiffusion(self.config).cuda(self.device)
 		
@@ -86,13 +101,17 @@ class Coach:
 		in_dims = out_dims[::-1]  # [item_num, denoise_dim]
 		self.image_denoise_model = Denoise(in_dims, out_dims, config).cuda(self.device)
 		self.image_denoise_opt = Adam(self.image_denoise_model.parameters(), lr=self.config.train.lr, weight_decay=0)
+		self.image_scheduler = CosineAnnealingWarmRestarts(self.image_denoise_opt, T_0=10, T_mult=1, eta_min=1e-4)
 
 		self.text_denoise_model = Denoise(in_dims, out_dims, config).cuda(self.device)
 		self.text_denoise_opt = Adam(self.text_denoise_model.parameters(), lr=self.config.train.lr, weight_decay=0)
+		self.text_scheduler = CosineAnnealingWarmRestarts(self.text_denoise_opt, T_0=10, T_mult=1, eta_min=1e-4)
 
 		if self.config.data.name == 'tiktok':
 			self.audio_denoise_model = Denoise(in_dims, out_dims, config).cuda(self.device)
 			self.audio_denoise_opt = Adam(self.audio_denoise_model.parameters(), lr=self.config.train.lr, weight_decay=0)
+			self.audio_scheduler = CosineAnnealingWarmRestarts(self.audio_denoise_opt, T_0=10, T_mult=1, eta_min=1e-4)
+
 
 	def makeTorchAdj(self, u_list, i_list, edge_list):
 		mat = coo_matrix((edge_list, (u_list, i_list)), shape=(self.config.data.user_num, self.config.data.item_num), dtype=np.float32)
@@ -156,6 +175,11 @@ class Coach:
 			self.text_denoise_opt.step()
 			if self.config.data.name == 'tiktok':
 				self.audio_denoise_opt.step()
+			
+			self.image_scheduler.step()
+			self.text_scheduler.step()
+			if self.config.data.name == 'tiktok':
+				self.audio_scheduler.step()
 
 		main_log.info('Re-build multimodal UI matrix')
 		with torch.no_grad():
@@ -275,39 +299,40 @@ class Coach:
 			cl2_item_embs = all_embs_cl[self.config.data.user_num:]
 
 			#* Cross CL Loss
-			cross_cl_loss = (InfoNCE(cl1_user_embs, cl2_user_embs, users, self.config.hyper.temp) + InfoNCE(cl1_item_embs, cl2_item_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.cross_cl_rate
+			cross_cl_loss = (InfoNCE(cl1_user_embs, cl2_user_embs, users, self.config.hyper.cross_cl_temp) + InfoNCE(cl1_item_embs, cl2_item_embs, pos_items, self.config.hyper.cross_cl_temp)) * self.config.hyper.cross_cl_rate
+			cl_loss = cross_cl_loss
 
-
-			#* Modality view as the anchor
 			if self.config.data.name == 'tiktok':
 				result = self.model.gcn_MM_CL(self.handler.torchBiAdj, self.image_adj, self.text_adj, self.audio_adj)
 				assert len(result) == 6
 				u_image_embs, i_image_embs, u_text_embs, i_text_embs, u_audio_embs, i_audio_embs = result
-				# pairwise CL: image-text, image-audio, text-audio
-				# cross_modal_cl_loss = (InfoNCE(u_image_embs, u_text_embs, users, self.config.hyper.temp) + InfoNCE(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.modal_cl_rate
-				# cross_modal_cl_loss += (InfoNCE(u_image_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(i_image_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.modal_cl_rate
-				# cross_modal_cl_loss += (InfoNCE(u_text_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(i_text_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.modal_cl_rate
+				if self.config.base.cl_method == 1: #! Only one of the two CL methods was used.
+					#* Modality view as the anchor
+					# pairwise CL: image-text, image-audio, text-audio
+					cross_modal_cl_loss = (InfoNCE(u_image_embs, u_text_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(i_image_embs, i_text_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
+					cross_modal_cl_loss += (InfoNCE(u_image_embs, u_audio_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(i_image_embs, i_audio_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
+					cross_modal_cl_loss += (InfoNCE(u_text_embs, u_audio_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(i_text_embs, i_audio_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
+					cl_loss += cross_modal_cl_loss
+				else:
+					#* Main view as the anchor
+					# only one CL: image-text
+					main_cl_loss = (InfoNCE(final_user_embs, u_image_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(final_item_embs, i_image_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
+					main_cl_loss += (InfoNCE(final_user_embs, u_text_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(final_item_embs, i_text_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
+					main_cl_loss += (InfoNCE(final_user_embs, u_audio_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(final_item_embs, i_audio_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate # type: ignore
+					cl_loss += main_cl_loss
 			else:
 				result = self.model.gcn_MM_CL(self.handler.torchBiAdj, self.image_adj, self.text_adj)
 				assert len(result) == 4
 				u_image_embs, i_image_embs, u_text_embs, i_text_embs = result
-				# only one CL: image-text
-				# cross_modal_cl_loss = (InfoNCE(u_image_embs, u_text_embs, users, self.config.hyper.temp) + InfoNCE(i_image_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.modal_cl_rate
+				if self.config.base.cl_method == 1: #! Only one of the two CL methods was used.
+					cross_modal_cl_loss = (InfoNCE(u_image_embs, u_text_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(i_image_embs, i_text_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
+					cl_loss += cross_modal_cl_loss
+				else:
+					#* Main view as the anchor
+					main_cl_loss = (InfoNCE(final_user_embs, u_image_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(final_item_embs, i_image_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
+					main_cl_loss += (InfoNCE(final_user_embs, u_text_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(final_item_embs, i_text_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
+					cl_loss += main_cl_loss
 
-			#* Main view as the anchor
-			main_cl_loss = (InfoNCE(final_user_embs, u_image_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_image_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.modal_cl_rate
-			main_cl_loss += (InfoNCE(final_user_embs, u_text_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_text_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.modal_cl_rate
-			if self.config.data.name == 'tiktok':
-				main_cl_loss += (InfoNCE(final_user_embs, u_audio_embs, users, self.config.hyper.temp) + InfoNCE(final_item_embs, i_audio_embs, pos_items, self.config.hyper.temp)) * self.config.hyper.modal_cl_rate # type: ignore
-
-			# if self.config.base.cl_method == 1: #! Only one of the two CL methods was used.
-			# 	cl_loss = main_cl_loss
-			# else:
-			# 	cl_loss = cross_modal_cl_loss
-			
-			#* 同时启用两种对比学习
-			cl_loss = cross_cl_loss + main_cl_loss
-			# --------------------
 			ep_cl_loss += cl_loss.item()
 
 			batch_joint_loss =  rec_loss + reg_loss + cl_loss
@@ -421,6 +446,14 @@ if __name__ == '__main__':
 
 	main_log = Log('main', config.data.name)
 	main_log.info('Start')
+	main_log.info("Configuration Details:")
+	for section, options in config.__dict__.items():
+		if isinstance(options, dict):
+			main_log.info(f"[{section}]")
+			for key, value in options.items():
+				main_log.info(f"  {key}: {value}")
+		else:
+			main_log.info(f"{section}: {options}")
 	data_handler = DataHandler(config)
 
 	main_log.info('Load Data')

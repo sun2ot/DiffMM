@@ -29,8 +29,9 @@ class DataConfig:
 
 @dataclass
 class HyperConfig:
-    temp: float = 0.5
+    modal_cl_temp: float = 0.5
     modal_cl_rate: float = 0.01
+    cross_cl_temp: float = 0.2
     cross_cl_rate: float = 0.2
     keepRate: float = 0.5
     noise_scale: float = 0.1
