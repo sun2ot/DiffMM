@@ -76,9 +76,8 @@ class Coach:
 						precisionMax = result['Precision']
 						bestEpoch = epoch
 					main_log.info(self.makePrint('🧪 Test', epoch, result))
-				main_log.info(f"💡 Current best: Epoch: {bestEpoch}, Recall: {recallMax:.4f}, NDCG: {ndcgMax:.4f}, Precision: {precisionMax:.4f}")
+				main_log.info(f"💡 Current best: Epoch: {bestEpoch}, Recall: {recallMax:.4f}({his_recall_max:.5f}), NDCG: {ndcgMax:.4f}({his_ndcg_max:.5f}), Precision: {precisionMax:.4f}({his_prec_max:.5f})")
 			main_log.info(f"Best epoch: {bestEpoch}, Recall: {recallMax:.5f}, NDCG: {ndcgMax:.5f}, Precision: {precisionMax:.5f}")
-			main_log.info(f"Historical best: Recall: {his_recall_max:.5f}, NDCG: {his_ndcg_max:.5f}, Precision: {his_prec_max:.5f}")
 		except KeyboardInterrupt:
 			main_log.info('🈲 Training interrupted by user!')
 			main_log.info(f"💡 Current best: Epoch: {bestEpoch}, Recall: {recallMax:.4f}, NDCG: {ndcgMax:.4f}, Precision: {precisionMax:.4f}")

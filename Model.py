@@ -570,7 +570,7 @@ class GaussianDiffusion(nn.Module):
 		contrastive_loss = 1 - F.cosine_similarity(user_modal_embs, user_id_embs, dim=-1)  # (batch,)
 
 		# 3. 正则化损失 (Regularization Loss)
-		reg_loss = l2_reg_loss(self.config.train.reg, [i_embs, modal_feat], self.device)  # 标量
+		reg_loss = l2_reg_loss(self.config.train.reg, [i_embs], self.device)  # 标量
 		reg_loss = reg_loss.expand(batch_size)  # (batch,)
 
 		# 4. 动态权重平衡
