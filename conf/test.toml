@@ -8,6 +8,7 @@ d_emb_size = 10 # time embedding size for diffusion step
 
 # Transformation type: 0 = Project Matrix, 1 = Linear, 2 = allrecipes
 trans = 1
+cl_method = 0
 
 # ------------------------------------------------------------
 
@@ -17,8 +18,9 @@ name = "tiktok" # Dataset name
 # ------------------------------------------------------------
 
 [hyper] # Hyperparameters for the model
-temp = 0.2 # Temperature in contrastive learning
+modal_cl_temp = 0.2 # Temperature in contrastive learning
 modal_cl_rate = 0.01 # Weight for contrastive learning
+cross_cl_temp = 0.2
 cross_cl_rate = 0.2
 keepRate = 0.5 # Ratio of edges to keep
 
