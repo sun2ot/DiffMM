@@ -34,7 +34,6 @@ residual_weight = 0.5  # RIS lambda
 modal_adj_weight = 0.2
 
 sampling_steps = 1 # Initial sampling steps for the inverse diffusion process
-rebuild_k = 1 # Use top k (probabilities) items to rebuild UI matrix
 
 # ------------------------------------------------------------
 

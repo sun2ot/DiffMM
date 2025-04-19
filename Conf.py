@@ -44,7 +44,6 @@ class HyperConfig:
     modal_adj_weight: float = 0.2
 
     sampling_steps: int = 0
-    rebuild_k: int = 1
 
 @dataclass
 class TrainConfig:
