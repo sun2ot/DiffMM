@@ -23,6 +23,8 @@ class DataHandler:
 			predir = './Datasets/tiktok/'
 		elif self.config.data.name == 'yelp':
 			predir = './mydatasets/yelp/'
+		elif self.config.data.name == 'ifashion':
+			predir = './mydatasets/ifashion/'
 		else:
 			raise ValueError(f"Unknown dataset: {self.config.data.name}")
 
