@@ -20,9 +20,9 @@ name = "yelp" # Dataset name
 
 [hyper] # Hyperparameters for the model
 modal_cl_temp = 0.5 # Temperature in contrastive learning
-modal_cl_rate = 0.2 # Weight for contrastive learning
+modal_cl_rate = 0.01 # Weight for contrastive learning
 cross_cl_temp = 0.2
-cross_cl_rate = 0.2
+cross_cl_rate = 0.01
 keepRate = 0.5 # Ratio of edges to keep
 
 noise_scale = 0.1 # Noise scale
@@ -39,12 +39,13 @@ sampling_steps = 0 # Initial sampling steps for the inverse diffusion process
 # ------------------------------------------------------------
 
 [train]
-lr = 0.01 # Learning rate
+lr = 0.001 # Learning rate
 batch = 1024 # Batch size
-test_batch = 256 # Number of users in a testing batch
-reg = 1e-4 # Weight decay regularizer
-epoch = 100 # Number of epochs
+test_batch = 1024 # Number of users in a testing batch
+reg = 1e-5 # Weight decay regularizer
+epoch = 50 # Number of epochs
 tstEpoch = 1 # Number of epochs to test while training
 gnn_layer = 1 # Number of GNN layers
 norm = false # Whether to apply normalization
 sampling_noise = false # Whether to use sampling noise
+use_lr_scheduler = true
