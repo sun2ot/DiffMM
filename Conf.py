@@ -56,6 +56,7 @@ class TrainConfig:
     gnn_layer: int = 1
     norm: bool = False
     sampling_noise: bool = False
+    use_lr_scheduler: bool = True
 
 @dataclass
 class Config:

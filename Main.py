@@ -57,11 +57,12 @@ class Coach:
 				tstFlag = (epoch % self.config.train.tstEpoch == 0) #? always be True?
 				result = self.trainEpoch()
 
-				self.model_scheduler.step()
-				self.image_scheduler.step()
-				self.text_scheduler.step()
-				if self.config.data.name == 'tiktok':
-					self.audio_scheduler.step()
+				if self.config.train.use_lr_scheduler:
+					self.model_scheduler.step()
+					self.image_scheduler.step()
+					self.text_scheduler.step()
+					if self.config.data.name == 'tiktok':
+						self.audio_scheduler.step()
 				
 				main_log.info(self.makePrint('⏩ Train', epoch, result))
 				if tstFlag:
@@ -174,11 +175,7 @@ class Coach:
 			self.text_denoise_opt.step()
 			if self.config.data.name == 'tiktok':
 				self.audio_denoise_opt.step()
-			
-			self.image_scheduler.step()
-			self.text_scheduler.step()
-			if self.config.data.name == 'tiktok':
-				self.audio_scheduler.step()
+
 
 		main_log.info('Re-build multimodal UI matrix')
 		with torch.no_grad():
