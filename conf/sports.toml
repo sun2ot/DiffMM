@@ -1,0 +1,52 @@
+[base]
+latdim = 64 # Embedding size
+topk = 20
+gpu = "0"
+seed = 2233 # Random seed
+denoise_dim = "[1024]" # embedding size for denoise layer input/output 
+d_emb_size = 10 # time embedding size for diffusion step
+
+# Transformation type: 0 = Project Matrix, 1 = Linear, 2 = allrecipes
+trans = 1
+
+cl_method = 1
+
+# ------------------------------------------------------------
+
+[data]
+name = "sports" # Dataset name
+
+# ------------------------------------------------------------
+
+[hyper] # Hyperparameters for the model
+modal_cl_temp = 0.5 # Temperature in contrastive learning
+modal_cl_rate = 0.01 # Weight for contrastive learning
+cross_cl_temp = 0.2
+cross_cl_rate = 0.1
+noise_degree = 0.2
+keepRate = 0.5 # Ratio of edges to keep
+
+noise_scale = 0.1 # Noise scale
+noise_min = 0.0001 # Minimum noise
+noise_max = 0.02 # Maximum noise
+steps = 5 # Number of steps
+
+e_loss = 0.5 # Weight of refact_ui_loss
+residual_weight = 0.5  # RIS lambda
+modal_adj_weight = 0.2
+
+sampling_steps = 0 # Initial sampling steps for the inverse diffusion process
+
+# ------------------------------------------------------------
+
+[train]
+lr = 0.001 # Learning rate
+batch = 1024 # Batch size
+test_batch = 1024 # Number of users in a testing batch
+reg = 1e-5 # Weight decay regularizer
+epoch = 100 # Number of epochs
+tstEpoch = 1 # Number of epochs to test while training
+gnn_layer = 1 # Number of GNN layers
+norm = false # Whether to apply normalization
+sampling_noise = false # Whether to use sampling noise
+use_lr_scheduler = true
