@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor
 from torch.optim.adam import Adam
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from Utils.Log import Log
 from Conf import load_config, Config
 from Model import Model, GaussianDiffusion, Denoise
@@ -27,34 +27,33 @@ class Coach:
 		result_str = f"Epoch {epoch}/{self.config.train.epoch}, {name}: "
 		for metric in results:
 			val = results[metric]
-			result_str += f"{metric}={val:.4f}, "
+			result_str += f"{metric}={val:.5f}, "
 		result_str = result_str[:-2] + '  ' #? del blank and `:`?
 		return result_str
 	
-	def need_update(self, l1: list, l2: list) -> bool:
-		"""
-		If the number of elements in l1 that are greater than l2 is strictly more than half (rounded up), return True.
-		"""
-		if len(l1) != len(l2):
-			raise ValueError("Result list shape should be the same!")
-
-		count_l1_greater = sum(1 for a, b in zip(l1, l2) if a > b)
-		half_length = (len(l1) + 1) // 2
-		return count_l1_greater >= half_length
+	def need_update(self, new: list, old: list) -> tuple[list, int]:
+		"""Update the maximum indicator. More than half of updates are marked as new best"""
+		re = []
+		tag = 0
+		for i,j in zip(new, old):
+			if i > j:
+				re.append(i)
+				tag = 1
+			else:
+				re.append(j)
+		return re, tag
 
 	def run(self):
 		self.prepareModel()
 		main_log.info('Model Initialized ✅')
 
-		his_recall_max, recallMax = 0, 0
-		his_ndcg_max, ndcgMax = 0, 0
-		his_prec_max, precisionMax = 0, 0
+		recallMax, ndcgMax, precisionMax = 0, 0, 0
 		bestEpoch = 0  #todo: early stop
 
 		main_log.info('Start training 🚀')
 		try:
 			for epoch in range(0, self.config.train.epoch):
-				tstFlag = (epoch % self.config.train.tstEpoch == 0) #? always be True?
+				tstFlag = (epoch % self.config.train.tstEpoch == 0)
 				result = self.trainEpoch()
 
 				if self.config.train.use_lr_scheduler:
@@ -68,21 +67,15 @@ class Coach:
 				if tstFlag:
 					result = self.testEpoch()
 					re_list = [result['Recall'], result['NDCG'], result['Precision']]
-					his_recall_max = max(his_recall_max, result['Recall'])
-					his_ndcg_max = max(his_ndcg_max, result['NDCG'])
-					his_prec_max = max(his_prec_max, result['Precision'])
-					if (self.need_update(re_list, [recallMax, ndcgMax, precisionMax])):
-						recallMax = result['Recall']
-						ndcgMax = result['NDCG']
-						precisionMax = result['Precision']
-						bestEpoch = epoch
+					new_re, tag = self.need_update(re_list, [recallMax, ndcgMax, precisionMax])
+					recallMax, ndcgMax, precisionMax = new_re
+					bestEpoch = epoch if tag else bestEpoch
 					main_log.info(self.makePrint('🧪 Test', epoch, result))
-				main_log.info(f"💡 Current best: Epoch: {bestEpoch}, Recall: {recallMax:.4f}({his_recall_max:.5f}), NDCG: {ndcgMax:.4f}({his_ndcg_max:.5f}), Precision: {precisionMax:.4f}({his_prec_max:.5f})")
+				main_log.info(f"💡 Current best: Epoch: {bestEpoch}, Recall: {recallMax:.5f}, NDCG: {ndcgMax:.5f}, Precision: {precisionMax:.5f}")
 			main_log.info(f"Best epoch: {bestEpoch}, Recall: {recallMax:.5f}, NDCG: {ndcgMax:.5f}, Precision: {precisionMax:.5f}")
 		except KeyboardInterrupt:
 			main_log.info('🈲 Training interrupted by user!')
-			main_log.info(f"💡 Current best: Epoch: {bestEpoch}, Recall: {recallMax:.4f}, NDCG: {ndcgMax:.4f}, Precision: {precisionMax:.4f}")
-			main_log.info(f"Historical best: Recall: {his_recall_max:.5f}, NDCG: {his_ndcg_max:.5f}, Precision: {his_prec_max:.5f}")
+			main_log.info(f"💡 Current best: Epoch: {bestEpoch}, Recall: {recallMax:.5f}, NDCG: {ndcgMax:.5f}, Precision: {precisionMax:.5f}")
 
 
 	def prepareModel(self):
@@ -93,7 +86,7 @@ class Coach:
 			self.model = Model(self.config, self.handler.image_feats.detach(), self.handler.text_feats.detach()).cuda(self.device)
 
 		self.opt = Adam(self.model.parameters(), lr=self.config.train.lr, weight_decay=0)
-		self.model_scheduler = CosineAnnealingWarmRestarts(self.opt, T_0=10, T_mult=1, eta_min=1e-4)
+		self.model_scheduler = CosineAnnealingLR(self.opt, T_max=self.config.train.epoch, eta_min=1e-4)
 
 		self.diffusion_model = GaussianDiffusion(self.config).cuda(self.device)
 		
@@ -101,16 +94,16 @@ class Coach:
 		in_dims = out_dims[::-1]  # [item_num, denoise_dim]
 		self.image_denoise_model = Denoise(in_dims, out_dims, config).cuda(self.device)
 		self.image_denoise_opt = Adam(self.image_denoise_model.parameters(), lr=self.config.train.lr, weight_decay=0)
-		self.image_scheduler = CosineAnnealingWarmRestarts(self.image_denoise_opt, T_0=10, T_mult=1, eta_min=1e-4)
+		self.image_scheduler = CosineAnnealingLR(self.image_denoise_opt, T_max=self.config.train.epoch, eta_min=1e-4)
 
 		self.text_denoise_model = Denoise(in_dims, out_dims, config).cuda(self.device)
 		self.text_denoise_opt = Adam(self.text_denoise_model.parameters(), lr=self.config.train.lr, weight_decay=0)
-		self.text_scheduler = CosineAnnealingWarmRestarts(self.text_denoise_opt, T_0=10, T_mult=1, eta_min=1e-4)
+		self.text_scheduler = CosineAnnealingLR(self.text_denoise_opt, T_max=self.config.train.epoch, eta_min=1e-4)
 
 		if self.config.data.name == 'tiktok':
 			self.audio_denoise_model = Denoise(in_dims, out_dims, config).cuda(self.device)
 			self.audio_denoise_opt = Adam(self.audio_denoise_model.parameters(), lr=self.config.train.lr, weight_decay=0)
-			self.audio_scheduler = CosineAnnealingWarmRestarts(self.audio_denoise_opt, T_0=10, T_mult=1, eta_min=1e-4)
+			self.audio_scheduler = CosineAnnealingLR(self.audio_denoise_opt, T_max=self.config.train.epoch, eta_min=1e-4)
 
 
 	def makeTorchAdj(self, u_list, i_list, edge_list):
@@ -267,7 +260,7 @@ class Coach:
 			for k in range(3): # GCN Layers = 3
 				joint_embs = torch.sparse.mm(self.handler.torchBiAdj, joint_embs)
 				random_noise = torch.rand_like(joint_embs)
-				joint_embs += torch.sign(joint_embs) * F.normalize(random_noise) # noise scale
+				joint_embs += torch.sign(joint_embs) * F.normalize(random_noise) * self.config.hyper.noise_degree
 				all_embs.append(joint_embs)
 				if k == 0: # which layer to CL
 					all_embs_cl = joint_embs

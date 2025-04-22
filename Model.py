@@ -574,7 +574,7 @@ class GaussianDiffusion(nn.Module):
 		reg_loss = reg_loss.expand(batch_size)  # (batch,)
 
 		# 4. 动态权重平衡
-		total_loss = reconstruction_loss + contrastive_loss * self.config.hyper.e_loss + reg_loss   # (batch,)
+		total_loss = reconstruction_loss + contrastive_loss * self.config.hyper.e_loss + reg_loss * self.config.train.reg   # (batch,)
 
 		return total_loss
 	

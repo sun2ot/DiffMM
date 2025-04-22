@@ -3,7 +3,7 @@ latdim = 64 # Embedding size
 topk = 20
 gpu = "0"
 seed = 125 # Random seed
-denoise_dim = "[1000]" # embedding size for denoise layer input/output 
+denoise_dim = "[1024]" # embedding size for denoise layer input/output 
 d_emb_size = 10 # time embedding size for diffusion step
 
 # Transformation type: 0 = Project Matrix, 1 = Linear, 2 = allrecipes
@@ -22,7 +22,8 @@ name = "yelp" # Dataset name
 modal_cl_temp = 0.5 # Temperature in contrastive learning
 modal_cl_rate = 0.01 # Weight for contrastive learning
 cross_cl_temp = 0.2
-cross_cl_rate = 0.01
+cross_cl_rate = 0.1
+noise_degree = 0.5
 keepRate = 0.5 # Ratio of edges to keep
 
 noise_scale = 0.1 # Noise scale
