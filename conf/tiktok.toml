@@ -1,7 +1,7 @@
 [base]
 latdim = 64 # Embedding size
 topk = 20
-gpu = "1"
+gpu = "0"
 seed = 1818 # Random seed
 denoise_dim = "[1024]" # embedding size for denoise layer input/output 
 d_emb_size = 10 # time embedding size for diffusion step
@@ -21,8 +21,8 @@ name = "tiktok" # Dataset name
 modal_cl_temp = 0.2 # Temperature in contrastive learning
 modal_cl_rate = 0.01 # Weight for contrastive learning
 cross_cl_temp = 0.2
-cross_cl_rate = 0.2
-noise_degee = 1
+cross_cl_rate = 0.5
+noise_degree = 1.5
 keepRate = 0.5 # Ratio of edges to keep
 
 noise_scale = 0.5 # Noise scale
