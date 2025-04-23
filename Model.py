@@ -376,11 +376,13 @@ class GaussianDiffusion(nn.Module):
 			torch.cat([self.posterior_variance[1].unsqueeze(0), self.posterior_variance[1:]])
 		)
 
-		# 均值计算简化
-		self.posterior_mean_coef1 = 1.0 / torch.sqrt(alphas)  # 1 / sqrt(α)
-		self.posterior_mean_coef2 = (1.0 - alphas) / (torch.sqrt(1.0 - self.alphas_cumprod))  # (1 - α) / sqrt(1 - \bar{α})
+		# 计算简化
+		# 1 / sqrt(α)
+		self.posterior_mean_coef1 = 1.0 / torch.sqrt(alphas)
+		# (1 - α) / sqrt(1 - \bar{α})
+		self.posterior_mean_coef2 = (1.0 - alphas) / torch.sqrt(1.0 - self.alphas_cumprod)
 
-	def backward_steps(self, model: Denoise, x_start: torch.Tensor, sampling_steps: int, sampling_noise=False):
+	def generate_view(self, model: Denoise, x_start: torch.Tensor, sampling_step: int):
 		"""
 		Implement inverse diffusion process (sampling start from `sampling_steps`)
 
@@ -390,10 +392,10 @@ class GaussianDiffusion(nn.Module):
 			sampling_steps (int): sampling start
 			sampling_noise (bool): whether to add noise
 		"""
-		if sampling_steps == 0:
+		if sampling_step == 0:
 			x_t = x_start  #! steps default = 0
 		else:
-			timesteps = torch.tensor([sampling_steps-1] * x_start.shape[0], device=self.device)
+			timesteps = torch.tensor([sampling_step-1] * x_start.shape[0], device=self.device)
 			x_t = self.forward_cal_xt(x_start, timesteps)
 		
 		indices = list(range(self.steps))[::-1]  # reverse order
@@ -404,24 +406,24 @@ class GaussianDiffusion(nn.Module):
 			x_t = model_mean
 		return x_t
 
-	def forward_cal_xt(self, x_start: torch.Tensor, timesteps: torch.Tensor, noise: Optional[torch.Tensor] = None):
+	def forward_cal_xt(self, x_0: torch.Tensor, timesteps: torch.Tensor, noise: Optional[torch.Tensor] = None):
 		"""
 		Calculate x_t from x_0 and noise.
 
 		Args:
-			x_start: (batch, item)
+			x_0: (batch, item)
 			timesteps: (batch,)
-			noise: Default is None. If not provided, torch.randn_like(x_start)
+			noise: Default is None. If not provided, torch.randn_like(x_0)
 
 		Returns:
 			torch.Tensor: Forward diffusion process x_t.
 		"""
 		if noise is None:
-			noise = torch.sign(x_start) * F.normalize(torch.randn_like(x_start))
+			noise = torch.sign(x_0) * F.normalize(torch.randn_like(x_0))
 		# x_t = \sqrt{\bar{α}_{t}} * x_0 + \sqrt{1-\bar{α}_{t}} * noise
-		x0_coef = self._extract_into_tensor(self.sqrt_alphas_cumprod, timesteps, x_start.shape)
-		noise_coef = self._extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, timesteps, x_start.shape)
-		return x0_coef * x_start + noise_coef * noise
+		x0_coef = self._extract_into_tensor(self.sqrt_alphas_cumprod, timesteps, x_0.shape)
+		noise_coef = self._extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, timesteps, x_0.shape)
+		return x0_coef * x_0 + noise_coef * noise
 
 	def _extract_into_tensor(self, var: torch.Tensor, timesteps: torch.Tensor, broadcast_shape: torch.Size):
 		"""
@@ -437,7 +439,7 @@ class GaussianDiffusion(nn.Module):
 			res = res.unsqueeze(-1)
 		return res.expand(broadcast_shape)
 
-	def p_mean_variance(self, denoise: Denoise, x_t: torch.Tensor, timesteps: torch.Tensor):
+	def p_mean_variance(self, denoise: Denoise, x_t: torch.Tensor, timesteps: torch.Tensor, noise: Optional[Tensor] = None):
 		"""
 		calculate posterior mean and posterior variance for inverse diffusion process
 
@@ -445,7 +447,9 @@ class GaussianDiffusion(nn.Module):
 			x (torch.Tensor): (batch_size, item_num)
 			timesteps (torch.Tensor): (ttt...batch_size)
 		"""
-		predicted_alpha0 = denoise.forward(x_t, timesteps)
+		predicted_x0 = denoise.forward(x_t, timesteps)
+		# if noise is None:
+		# 	noise = torch.randn_like(x_t)
 
 		model_variance = self.posterior_variance
 		model_log_variance = self.posterior_log_variance_clipped
@@ -453,7 +457,8 @@ class GaussianDiffusion(nn.Module):
 		model_variance = self._extract_into_tensor(model_variance, timesteps, x_t.shape)
 		model_log_variance = self._extract_into_tensor(model_log_variance, timesteps, x_t.shape)
 
-		model_mean = (self._extract_into_tensor(self.posterior_mean_coef1, timesteps, x_t.shape) * predicted_alpha0 + self._extract_into_tensor(self.posterior_mean_coef2, timesteps, x_t.shape) * x_t)
+		model_mean = (self._extract_into_tensor(self.posterior_mean_coef1, timesteps, x_t.shape) * predicted_x0 + self._extract_into_tensor(self.posterior_mean_coef2, timesteps, x_t.shape) * x_t)
+		# model_mean = self._extract_into_tensor(self.posterior_mean_coef1, timesteps, x_t.shape) * (x_t - self._extract_into_tensor(self.posterior_mean_coef2, timesteps, x_t.shape) * noise)
 		
 		return model_mean, model_log_variance
 
@@ -522,13 +527,13 @@ class GaussianDiffusion(nn.Module):
 		# 2. 对比损失 (Contrastive Loss)
 		user_modal_embs = torch.sparse.mm(model_output, modal_feat)  # (batch, latdim)
 		user_id_embs = torch.sparse.mm(x_start, i_embs)  # (batch, latdim)
-		contrastive_loss = 1 - F.cosine_similarity(user_modal_embs, user_id_embs, dim=-1)  # (batch,)
+		sim_loss = 1 - F.cosine_similarity(user_modal_embs, user_id_embs, dim=-1)  # (batch,)
 
 		# 3. 正则化损失 (Regularization Loss)
 		reg_loss = l2_reg_loss(self.config.train.reg, [i_embs], self.device)  # 标量
 		reg_loss = reg_loss.expand(batch_size)  # (batch,)
 
 		# 4. 动态权重平衡
-		total_loss = reconstruction_loss + contrastive_loss * self.config.hyper.e_loss + reg_loss * self.config.train.reg   # (batch,)
+		total_loss = reconstruction_loss + sim_loss * self.config.hyper.sim_weight + reg_loss * self.config.train.reg   # (batch,)
 
 		return total_loss

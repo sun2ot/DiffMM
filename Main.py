@@ -194,10 +194,10 @@ class Coach:
 				topk_values = user_degrees[batch_u_idxs]
 
 				for m in modality_names:
-					denoised_batch = self.diffusion_model.backward_steps(
+					denoised_batch = self.diffusion_model.generate_view(
 						denoise_model_dict[m],
 						batch_u_items,
-						self.config.hyper.sampling_steps
+						self.config.hyper.sampling_step
 					)
 					for i in range(batch_u_idxs.shape[0]):
 						user_topk = topk_values[i]

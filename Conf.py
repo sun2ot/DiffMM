@@ -40,11 +40,11 @@ class HyperConfig:
     noise_max: float = 0.02
     steps: int = 5
 
-    e_loss: float = 0.1
+    sim_weight: float = 0.1
     residual_weight: float = 0.5
     modal_adj_weight: float = 0.2
 
-    sampling_steps: int = 0
+    sampling_step: int = 0
 
 @dataclass
 class TrainConfig:
