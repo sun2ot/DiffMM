@@ -31,11 +31,11 @@ noise_min = 0.0001 # Minimum noise
 noise_max = 0.02 # Maximum noise
 steps = 5 # Number of steps
 
-e_loss = 0.1 # Weight of refact_ui_loss
+sim_weight = 0.1 # Weight of refact_ui_loss
 residual_weight = 0.5  # RIS lambda
 modal_adj_weight = 0.2
 
-sampling_steps = 0 # Initial sampling steps for the inverse diffusion process
+sampling_step = 0 # Initial sampling steps for the inverse diffusion process
 
 # ------------------------------------------------------------
 
@@ -47,6 +47,4 @@ reg = 1e-5 # Weight decay regularizer
 epoch = 50 # Number of epochs
 tstEpoch = 1 # Number of epochs to test while training
 gnn_layer = 1 # Number of GNN layers
-norm = false # Whether to apply normalization
-sampling_noise = false # Whether to use sampling noise
 use_lr_scheduler = true
