@@ -5,10 +5,6 @@ gpu = "0"
 seed = 2233 # Random seed
 denoise_dim = "[1024]" # embedding size for denoise layer input/output 
 d_emb_size = 10 # time embedding size for diffusion step
-
-# Transformation type: 0 = Project Matrix, 1 = Linear, 2 = allrecipes
-trans = 1
-
 cl_method = 1
 
 # ------------------------------------------------------------
@@ -24,7 +20,6 @@ modal_cl_rate = 0.01 # Weight for contrastive learning
 cross_cl_temp = 0.2
 cross_cl_rate = 0.1
 noise_degree = 0.1
-keepRate = 0.5 # Ratio of edges to keep
 
 noise_scale = 0.1 # Noise scale
 noise_min = 0.0001 # Minimum noise

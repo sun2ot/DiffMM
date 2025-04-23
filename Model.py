@@ -21,27 +21,14 @@ class Model(nn.Module):
 		self.u_embs = nn.Parameter(init(torch.empty(self.config.data.user_num, self.config.base.latdim))) # type: ignore
 		self.i_embs = nn.Parameter(init(torch.empty(self.config.data.item_num, self.config.base.latdim))) # type: ignore
 
-		if self.config.base.trans == 1:
-			self.image_layer = nn.Linear(self.config.data.image_feat_dim, self.config.base.latdim)
-			self.text_layer = nn.Linear(self.config.data.text_feat_dim, self.config.base.latdim)
-		elif self.config.base.trans == 0:
-			self.image_matrix = nn.Parameter(init(torch.empty(size=(self.config.data.image_feat_dim, self.config.base.latdim)))) # type: ignore
-			self.text_matrix = nn.Parameter(init(torch.empty(size=(self.config.data.text_feat_dim, self.config.base.latdim)))) # type: ignore
-		else:  # self.config.base.trans == 2
-			self.image_matrix = nn.Parameter(init(torch.empty(size=(self.config.data.image_feat_dim, self.config.base.latdim)))) # type: ignore
-			self.text_layer = nn.Linear(self.config.data.text_feat_dim, self.config.base.latdim)
+		self.image_layer = nn.Linear(self.config.data.image_feat_dim, self.config.base.latdim)
+		self.text_layer = nn.Linear(self.config.data.text_feat_dim, self.config.base.latdim)
 		if audio_embedding is not None:
-			if self.config.base.trans == 1:
-				self.audio_layer = nn.Linear(self.config.data.audio_feat_dim, self.config.base.latdim)
-			else:
-				self.audio_matrix = nn.Parameter(init(torch.empty(size=(self.config.data.audio_feat_dim, self.config.base.latdim)))) # type: ignore
+			self.audio_layer = nn.Linear(self.config.data.audio_feat_dim, self.config.base.latdim)
 
 		self.image_embedding = image_embedding
 		self.text_embedding = text_embedding
-		if audio_embedding is not None:
-			self.audio_embedding = audio_embedding
-		else:
-			self.audio_embedding = None
+		self.audio_embedding = audio_embedding
 		
 		# average weight
 		if audio_embedding is not None:
@@ -49,7 +36,6 @@ class Model(nn.Module):
 		else:
 			self.modal_weight = nn.Parameter(torch.tensor([0.5, 0.5])) # type: ignore
 		self.softmax = nn.Softmax(dim=-1)
-		self.dropout = nn.Dropout(p=0.1)
 		self.leakyrelu = nn.LeakyReLU(0.2)
 				
 	def getItemEmbs(self):
@@ -59,27 +45,16 @@ class Model(nn.Module):
 		return self.u_embs
 	
 	def getImageFeats(self) -> torch.Tensor:
-		if self.config.base.trans == 0 or self.config.base.trans == 2:
-			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_matrix))
-			return image_feats
-		else:
-			return self.image_layer(self.image_embedding)
+		return self.image_layer(self.image_embedding)
 	
 	def getTextFeats(self) -> torch.Tensor:
-		if self.config.base.trans == 0:
-			text_feats = self.leakyrelu(torch.mm(self.text_embedding, self.text_matrix))
-			return text_feats
-		else:
-			return self.text_layer(self.text_embedding)
+		return self.text_layer(self.text_embedding)
 
 	def getAudioFeats(self) -> Optional[torch.Tensor]:
 		if self.audio_embedding is None:
 			return None
 		else:
-			if self.config.base.trans == 0:
-				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_matrix))
-			else:
-				audio_feats = self.audio_layer(self.audio_embedding)
+			audio_feats = self.audio_layer(self.audio_embedding)
 		return audio_feats
 
 	def gcn_MM(self, adj: Tensor, image_adj: Tensor, text_adj: Tensor, audio_adj: Optional[Tensor] = None):
@@ -106,15 +81,8 @@ class Model(nn.Module):
 			i_audio_embs: Optional[Tensor] = None
 
 		 # Trans multimodal feats to 64 (latdim)
-		if self.config.base.trans == 0:
-			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_matrix))
-			text_feats = self.leakyrelu(torch.mm(self.text_embedding, self.text_matrix))
-		elif self.config.base.trans == 1:
-			image_feats = self.image_layer(self.image_embedding)
-			text_feats = self.text_layer(self.text_embedding)
-		else:
-			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_matrix))
-			text_feats = self.text_layer(self.text_embedding)
+		image_feats = self.image_layer(self.image_embedding)
+		text_feats = self.text_layer(self.text_embedding)
 
 		weight: nn.Parameter = self.softmax(self.modal_weight) # type: ignore
 
@@ -132,10 +100,7 @@ class Model(nn.Module):
 		)
 
 		if self.audio_embedding is not None:
-			if self.config.base.trans == 0:
-				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_matrix))
-			else:
-				audio_feats = self.audio_layer(self.audio_embedding)
+			audio_feats = self.audio_layer(self.audio_embedding)
 			audio_adj_embs = torch.cat([self.u_embs, F.normalize(audio_feats)])
 			audio_adj_embs = torch.sparse.mm(audio_adj, audio_adj_embs)
 			gcn_output.u_audio_embs, gcn_output.i_audio_embs = audio_adj_embs[:user], audio_adj_embs[user:]

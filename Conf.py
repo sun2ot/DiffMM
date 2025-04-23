@@ -11,10 +11,9 @@ class BaseConfig:
     latdim: int = 64
     topk: int = 20
     gpu: str = "0"
-    seed: int = 421
-    denoise_dim: str = "[1000]"
+    seed: int = 8888
+    denoise_dim: str = "[1024]"
     d_emb_size: int = 10
-    trans: int = 0
     cl_method: int = 0
 
 @dataclass
@@ -34,7 +33,7 @@ class HyperConfig:
     cross_cl_temp: float = 0.2
     cross_cl_rate: float = 0.2
     noise_degree: float = 0.2
-    keepRate: float = 0.5
+
     noise_scale: float = 0.1
     noise_min: float = 0.0001
     noise_max: float = 0.02
@@ -55,7 +54,6 @@ class TrainConfig:
     epoch: int = 50
     tstEpoch: int = 1
     gnn_layer: int = 1
-    norm: bool = False
     use_lr_scheduler: bool = True
 
 @dataclass
