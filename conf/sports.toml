@@ -23,7 +23,7 @@ modal_cl_temp = 0.5 # Temperature in contrastive learning
 modal_cl_rate = 0.01 # Weight for contrastive learning
 cross_cl_temp = 0.2
 cross_cl_rate = 0.1
-noise_degree = 0.2
+noise_degree = 0.1
 keepRate = 0.5 # Ratio of edges to keep
 
 noise_scale = 0.1 # Noise scale
