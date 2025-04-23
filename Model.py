@@ -94,6 +94,16 @@ class Model(nn.Module):
 		Returns:
 			Tuple (Tensor, Tensor): (final_user_embs, final_item_embs)
 		"""
+		@dataclass
+		class GCNOutput:
+			u_final_embs: Tensor
+			i_final_embs: Tensor
+			u_image_embs: Tensor
+			i_image_embs: Tensor
+			u_text_embs: Tensor
+			i_text_embs: Tensor
+			u_audio_embs: Optional[Tensor] = None
+			i_audio_embs: Optional[Tensor] = None
 
 		 # Trans multimodal feats to 64 (latdim)
 		if self.config.base.trans == 0:
@@ -106,118 +116,58 @@ class Model(nn.Module):
 			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_matrix))
 			text_feats = self.text_layer(self.text_embedding)
 
-		if audio_adj is not None:
-			if self.config.base.trans == 0:
-				assert self.audio_embedding is not None
-				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_matrix))
-			else:
-				audio_feats = self.audio_layer(self.audio_embedding)
-		else:
-			audio_feats = None
-
 		weight: nn.Parameter = self.softmax(self.modal_weight) # type: ignore
 
-		# image
 		image_adj_embs = torch.cat([self.u_embs, F.normalize(image_feats)])  # (node, dim)
 		image_adj_embs = torch.sparse.mm(image_adj, image_adj_embs)  # (node, dim) #! 这个就是gcn_MM_CL的返回值
 
-		image_aware_embs = torch.cat([self.u_embs, self.i_embs])  # (node, dim)
-		image_aware_embs = torch.sparse.mm(adj, image_aware_embs)  # (node, dim)
-		
-		# text
 		text_adj_embs = torch.cat([self.u_embs, F.normalize(text_feats)])
 		text_adj_embs = torch.sparse.mm(text_adj, text_adj_embs)
+
+		user = self.config.data.user_num
+		gcn_output = GCNOutput(
+			image_adj_embs[:user], image_adj_embs[user:],  # just u/i_final_embs placeholder
+			image_adj_embs[:user], image_adj_embs[user:],
+			text_adj_embs[:user], text_adj_embs[user:]
+		)
+
+		if self.audio_embedding is not None:
+			if self.config.base.trans == 0:
+				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_matrix))
+			else:
+				audio_feats = self.audio_layer(self.audio_embedding)
+			audio_adj_embs = torch.cat([self.u_embs, F.normalize(audio_feats)])
+			audio_adj_embs = torch.sparse.mm(audio_adj, audio_adj_embs)
+			gcn_output.u_audio_embs, gcn_output.i_audio_embs = audio_adj_embs[:user], audio_adj_embs[user:]
+		else:
+			audio_adj_embs = None
+
+		image_aware_embs = torch.cat([self.u_embs, self.i_embs])  # (node, dim)
+		image_aware_embs = torch.sparse.mm(adj, image_aware_embs)  # (node, dim)
 
 		text_aware_embs = torch.cat([self.u_embs, self.i_embs])
 		text_aware_embs = torch.sparse.mm(adj, text_aware_embs)
 
-		# audio
-		if audio_adj is not None:
-			assert audio_feats is not None
-			audio_adj_embs = torch.cat([self.u_embs, F.normalize(audio_feats)])
-			audio_adj_embs = torch.sparse.mm(audio_adj, audio_adj_embs)
+		image_aware_embs += self.config.hyper.modal_adj_weight * image_adj_embs
+		text_aware_embs += self.config.hyper.modal_adj_weight * text_adj_embs
 
+		modal_embs = weight[0] * image_aware_embs + weight[1] * text_aware_embs
+
+		if audio_adj_embs is not None:
 			audio_aware_embs = torch.cat([self.u_embs, self.i_embs])
 			audio_aware_embs = torch.sparse.mm(adj, audio_aware_embs)
 
-		else:
-			audio_adj_embs, audio_aware_embs = None, None
-
-		image_aware_embs += self.config.hyper.modal_adj_weight * image_adj_embs
-		text_aware_embs += self.config.hyper.modal_adj_weight * text_adj_embs
-		if audio_adj is not None:
-			assert audio_adj_embs is not None
 			audio_aware_embs += self.config.hyper.modal_adj_weight * audio_adj_embs
-		
-		if audio_adj is None:
-			modal_embs = weight[0] * image_aware_embs + weight[1] * text_aware_embs
-		else:
-			modal_embs = weight[0] * image_aware_embs + weight[1] * text_aware_embs + weight[2] * audio_aware_embs
+			
+			modal_embs += weight[2] * audio_aware_embs
 
 		final_embs = modal_embs
-		embs_list = [final_embs]
-		# 只做一层GCN
-		final_embs = torch.sparse.mm(adj, embs_list[-1])
-		embs_list.append(final_embs)
-		final_embs = torch.stack(embs_list).sum(dim=0)
-		final_embs = final_embs + self.config.hyper.residual_weight * modal_embs
+		final_embs += torch.sparse.mm(adj, modal_embs)
+		final_embs += self.config.hyper.residual_weight * modal_embs
+		gcn_output.u_final_embs, gcn_output.i_final_embs = final_embs[:self.config.data.user_num], final_embs[self.config.data.user_num:]
 
-		return final_embs[:self.config.data.user_num], final_embs[self.config.data.user_num:]
+		return gcn_output
 
-	def gcn_MM_CL(self, adj: Tensor, image_adj: Tensor, text_adj: Tensor, audio_adj: Optional[Tensor] = None):
-		"""
-		Multimodal graph aggregation for CL task?
-
-		Returns:
-			image_u_embs, image_i_embs, text_u_embs, text_i_embs, Optional(audio_u_embs, audio_i_embs)
-		"""
-		if self.config.base.trans == 0:
-			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_matrix))
-			text_feats = self.leakyrelu(torch.mm(self.text_embedding, self.text_matrix))
-		elif self.config.base.trans == 1:
-			image_feats = self.image_layer(self.image_embedding)
-			text_feats = self.text_layer(self.text_embedding)
-		else:
-			image_feats = self.leakyrelu(torch.mm(self.image_embedding, self.image_matrix))
-			text_feats = self.text_layer(self.text_embedding)
-
-		if audio_adj is not None:
-			if self.config.base.trans == 0:
-				assert self.audio_embedding is not None
-				audio_feats = self.leakyrelu(torch.mm(self.audio_embedding, self.audio_matrix))
-			else:
-				audio_feats = self.audio_layer(self.audio_embedding)
-		else:
-			audio_feats = None
-
-		image_aware_embs = torch.cat([self.u_embs, F.normalize(image_feats)])
-		image_aware_embs = torch.sparse.mm(image_adj, image_aware_embs)
-
-		text_aware_embs = torch.cat([self.u_embs, F.normalize(text_feats)])
-		text_aware_embs = torch.sparse.mm(text_adj, text_aware_embs)
-
-		if audio_adj is not None:
-			assert audio_feats is not None
-			audio_aware_embs = torch.cat([self.u_embs, F.normalize(audio_feats)])
-			audio_aware_embs = torch.sparse.mm(audio_adj, audio_aware_embs)
-		else:
-			audio_aware_embs = None
-
-		image_modal_embs = image_aware_embs
-		text_modal_embs = text_aware_embs
-
-		if audio_adj is not None:
-			assert audio_aware_embs is not None
-			audio_modal_embs = audio_aware_embs
-		else:
-			audio_modal_embs = None
-
-		if audio_adj is None:
-			return image_modal_embs[:self.config.data.user_num], image_modal_embs[self.config.data.user_num:], text_modal_embs[:self.config.data.user_num], text_modal_embs[self.config.data.user_num:]
-		else:
-			assert audio_modal_embs is not None
-			return image_modal_embs[:self.config.data.user_num], image_modal_embs[self.config.data.user_num:], text_modal_embs[:self.config.data.user_num], text_modal_embs[self.config.data.user_num:], audio_modal_embs[:self.config.data.user_num], audio_modal_embs[self.config.data.user_num:]
-		
 class Denoise(nn.Module):
 	def __init__(self, in_dims: list[int], out_dims: list[int], config: Config, dropout=0.5):
 		"""

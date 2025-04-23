@@ -239,9 +239,11 @@ class Coach:
 			neg_items: Tensor = neg_items.long().cuda(self.device)
 
 			if self.config.data.name == 'tiktok':
-				final_user_embs, final_item_embs = self.model.gcn_MM(self.handler.torchBiAdj, self.image_adj, self.text_adj, self.audio_adj)
+				gcn_output = self.model.gcn_MM(self.handler.torchBiAdj, self.image_adj, self.text_adj, self.audio_adj)
+				final_user_embs, final_item_embs = gcn_output.u_final_embs, gcn_output.i_final_embs
 			else:
-				final_user_embs, final_item_embs = self.model.gcn_MM(self.handler.torchBiAdj, self.image_adj, self.text_adj)
+				gcn_output = self.model.gcn_MM(self.handler.torchBiAdj, self.image_adj, self.text_adj)
+				final_user_embs, final_item_embs = gcn_output.u_final_embs, gcn_output.i_final_embs
 			
 			u_embs = final_user_embs[users]
 			pos_embs = final_item_embs[pos_items]
@@ -275,9 +277,13 @@ class Coach:
 			cl_loss = cross_cl_loss
 
 			if self.config.data.name == 'tiktok':
-				result = self.model.gcn_MM_CL(self.handler.torchBiAdj, self.image_adj, self.text_adj, self.audio_adj)
-				assert len(result) == 6
-				u_image_embs, i_image_embs, u_text_embs, i_text_embs, u_audio_embs, i_audio_embs = result
+				# result = self.model.gcn_MM_CL(self.handler.torchBiAdj, self.image_adj, self.text_adj, self.audio_adj)
+				# assert len(result) == 6
+				# u_image_embs, i_image_embs, u_text_embs, i_text_embs, u_audio_embs, i_audio_embs = result
+				u_image_embs, i_image_embs = gcn_output.u_image_embs, gcn_output.i_image_embs
+				u_text_embs, i_text_embs = gcn_output.u_text_embs, gcn_output.i_text_embs
+				u_audio_embs, i_audio_embs = gcn_output.u_audio_embs, gcn_output.i_audio_embs
+				assert u_audio_embs is not None and i_audio_embs is not None
 				if self.config.base.cl_method == 1: #! Only one of the two CL methods was used.
 					#* Modality view as the anchor
 					# pairwise CL: image-text, image-audio, text-audio
@@ -290,12 +296,14 @@ class Coach:
 					# only one CL: image-text
 					main_cl_loss = (InfoNCE(final_user_embs, u_image_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(final_item_embs, i_image_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
 					main_cl_loss += (InfoNCE(final_user_embs, u_text_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(final_item_embs, i_text_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
-					main_cl_loss += (InfoNCE(final_user_embs, u_audio_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(final_item_embs, i_audio_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate # type: ignore
+					main_cl_loss += (InfoNCE(final_user_embs, u_audio_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(final_item_embs, i_audio_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
 					cl_loss += main_cl_loss
 			else:
-				result = self.model.gcn_MM_CL(self.handler.torchBiAdj, self.image_adj, self.text_adj)
-				assert len(result) == 4
-				u_image_embs, i_image_embs, u_text_embs, i_text_embs = result
+				# result = self.model.gcn_MM_CL(self.handler.torchBiAdj, self.image_adj, self.text_adj)
+				# assert len(result) == 4
+				# u_image_embs, i_image_embs, u_text_embs, i_text_embs = result
+				u_image_embs, i_image_embs = gcn_output.u_image_embs, gcn_output.i_image_embs
+				u_text_embs, i_text_embs = gcn_output.u_text_embs, gcn_output.i_text_embs
 				if self.config.base.cl_method == 1: #! Only one of the two CL methods was used.
 					cross_modal_cl_loss = (InfoNCE(u_image_embs, u_text_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(i_image_embs, i_text_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
 					cl_loss += cross_modal_cl_loss
@@ -334,9 +342,10 @@ class Coach:
 		test_steps = len(testData) // self.config.train.test_batch
 
 		if self.config.data.name == 'tiktok':
-			user_embs, item_embs = self.model.gcn_MM(self.handler.torchBiAdj, self.image_adj, self.text_adj, self.audio_adj)
+			gcn_output = self.model.gcn_MM(self.handler.torchBiAdj, self.image_adj, self.text_adj, self.audio_adj)
 		else:
-			user_embs, item_embs = self.model.gcn_MM(self.handler.torchBiAdj, self.image_adj, self.text_adj)
+			gcn_output = self.model.gcn_MM(self.handler.torchBiAdj, self.image_adj, self.text_adj)
+		user_embs, item_embs = gcn_output.u_final_embs, gcn_output.i_final_embs
 
 		for usr, trainMask in testLoader:
 			i += 1
