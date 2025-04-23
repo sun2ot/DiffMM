@@ -20,9 +20,6 @@ class Model(nn.Module):
 		self.device = torch.device(f"cuda:{self.config.base.gpu}" if torch.cuda.is_available() else "cpu")
 		self.u_embs = nn.Parameter(init(torch.empty(self.config.data.user_num, self.config.base.latdim))) # type: ignore
 		self.i_embs = nn.Parameter(init(torch.empty(self.config.data.item_num, self.config.base.latdim))) # type: ignore
-		self.layer = nn.Sequential(*[GCNLayer() for i in range(self.config.train.gnn_layer)])
-
-		self.edgeDropper = SpAdjDropEdge(self.config.hyper.keepRate)
 
 		if self.config.base.trans == 1:
 			self.image_layer = nn.Linear(self.config.data.image_feat_dim, self.config.base.latdim)
@@ -122,7 +119,7 @@ class Model(nn.Module):
 
 		# image
 		image_adj_embs = torch.cat([self.u_embs, F.normalize(image_feats)])  # (node, dim)
-		image_adj_embs = torch.sparse.mm(image_adj, image_adj_embs)  # (node, dim)
+		image_adj_embs = torch.sparse.mm(image_adj, image_adj_embs)  # (node, dim) #! 这个就是gcn_MM_CL的返回值
 
 		image_aware_embs = torch.cat([self.u_embs, self.i_embs])  # (node, dim)
 		image_aware_embs = torch.sparse.mm(adj, image_aware_embs)  # (node, dim)
@@ -163,8 +160,6 @@ class Model(nn.Module):
 		final_embs = torch.sparse.mm(adj, embs_list[-1])
 		embs_list.append(final_embs)
 		final_embs = torch.stack(embs_list).sum(dim=0)
-
-# final_embs = final_embs + self.config.hyper.residual_weight * F.normalize(modal_embs)
 		final_embs = final_embs + self.config.hyper.residual_weight * modal_embs
 
 		return final_embs[:self.config.data.user_num], final_embs[self.config.data.user_num:]
@@ -222,38 +217,6 @@ class Model(nn.Module):
 		else:
 			assert audio_modal_embs is not None
 			return image_modal_embs[:self.config.data.user_num], image_modal_embs[self.config.data.user_num:], text_modal_embs[:self.config.data.user_num], text_modal_embs[self.config.data.user_num:], audio_modal_embs[:self.config.data.user_num], audio_modal_embs[self.config.data.user_num:]
-
-	def reg_loss(self):
-		"""calculate user and item embedding L2 reg loss"""
-		loss = 0
-		loss += self.u_embs.norm(2).square() # type: ignore
-		loss += self.i_embs.norm(2).square() # type: ignore
-		return loss
-
-class GCNLayer(nn.Module):
-	"""adi @ embs"""
-	def __init__(self):
-		super(GCNLayer, self).__init__()
-
-	def forward(self, adj: Tensor, embs: Tensor):
-		"""sparse matrix multiplication"""
-		return torch.sparse.mm(adj, embs)
-
-class SpAdjDropEdge(nn.Module):
-	def __init__(self, keepRate):
-		super(SpAdjDropEdge, self).__init__()
-		self.keepRate = keepRate
-
-	def forward(self, adj):
-		vals = adj._values()
-		idxs = adj._indices()
-		edgeNum = vals.size()
-		mask = ((torch.rand(edgeNum) + self.keepRate).floor()).type(torch.bool)
-
-		newVals = vals[mask] / self.keepRate
-		newIdxs = idxs[:, mask]
-
-		return torch.sparse_coo_tensor(newIdxs, newVals, adj.shape)
 		
 class Denoise(nn.Module):
 	def __init__(self, in_dims: list[int], out_dims: list[int], config: Config, dropout=0.5):
@@ -272,14 +235,12 @@ class Denoise(nn.Module):
 		self.in_dims = in_dims
 		self.out_dims = out_dims
 		self.time_emb_dim = config.base.d_emb_size #* time embedding size for diffusion step
-		self.norm = config.train.norm
 
 		self.emb_layer = nn.Linear(self.time_emb_dim, self.time_emb_dim) # (10, 10)
 
 		in_dims_temp: list = [self.in_dims[0] + self.time_emb_dim] + self.in_dims[1:]  # (item_num+10, 1000)
 		out_dims_temp: list = self.out_dims  # (1000, item_num)
 
-		#! What is the dims for?
 		# (item_num+10, 1000)
 		self.in_layers = nn.ModuleList([nn.Linear(d_in, d_out) for d_in, d_out in zip(in_dims_temp[:-1], in_dims_temp[1:])])
 		# (1000, item_num)
@@ -304,7 +265,7 @@ class Denoise(nn.Module):
 			initialize_layer(layer)
 		initialize_layer(self.emb_layer)
 
-	def forward(self, x_t: torch.Tensor, timesteps: torch.Tensor, mess_dropout=False, modal_feat: Optional[Tensor] = None) -> torch.Tensor:
+	def forward(self, x_t: torch.Tensor, timesteps: torch.Tensor, modal_feat: Optional[Tensor] = None) -> torch.Tensor:
 		"""
 		Denoise Layer
 
@@ -324,11 +285,6 @@ class Denoise(nn.Module):
 			# Force the last dimension is even (cat with zeros col)
 			time_emb = torch.cat([time_emb, torch.zeros_like(time_emb[:, :1])], dim=-1)
 		time_emb = self.emb_layer(time_emb)  # (batch, 10)
-
-		if self.norm:
-			x_t = F.normalize(x_t)
-		if mess_dropout:
-			x_t = self.drop(x_t)
 
 		if modal_feat is not None:
 			modal_feat_projected = torch.mm(x_t, modal_feat)  # (batch, latdim)
@@ -434,7 +390,6 @@ class GaussianDiffusion(nn.Module):
 			sampling_steps (int): sampling start
 			sampling_noise (bool): whether to add noise
 		"""
-		#todo: check sampling_steps > config.train.steps?
 		if sampling_steps == 0:
 			x_t = x_start  #! steps default = 0
 		else:
@@ -445,13 +400,8 @@ class GaussianDiffusion(nn.Module):
 
 		for i in indices:
 			timesteps = torch.tensor([i] * x_t.shape[0], device=self.device) # Select the most probable time step
-			model_mean, model_log_variance = self.p_mean_variance(model, x_t, timesteps)
-			if sampling_noise:
-				noise = torch.randn_like(x_t)
-				nonzero_mask = ((timesteps!=0).float().view(-1, *([1]*(len(x_t.shape)-1))))
-				x_t = model_mean + nonzero_mask * torch.exp(0.5 * model_log_variance) * noise
-			else:
-				x_t = model_mean
+			model_mean, _ = self.p_mean_variance(model, x_t, timesteps)
+			x_t = model_mean
 		return x_t
 
 	def forward_cal_xt(self, x_start: torch.Tensor, timesteps: torch.Tensor, noise: Optional[torch.Tensor] = None):
@@ -495,7 +445,7 @@ class GaussianDiffusion(nn.Module):
 			x (torch.Tensor): (batch_size, item_num)
 			timesteps (torch.Tensor): (ttt...batch_size)
 		"""
-		predicted_alpha0 = denoise(x_t, timesteps, False)
+		predicted_alpha0 = denoise.forward(x_t, timesteps)
 
 		model_variance = self.posterior_variance
 		model_log_variance = self.posterior_log_variance_clipped
@@ -529,6 +479,11 @@ class GaussianDiffusion(nn.Module):
 		weights = self.calculate_time_step_weights()  # 获取时间步的采样权重
 		timesteps = torch.multinomial(weights, batch_size, replacement=True)  # 根据权重采样
 		return timesteps
+	
+	def SNR(self, t: torch.Tensor) -> torch.Tensor:
+		"""Compute the Signal-to-Noise Ratio (SNR) at a given timestep."""
+		epsilon = 1e-8
+		return self.alphas_cumprod[t] / (1 - self.alphas_cumprod[t] + epsilon)
 
 	def training_losses(self, model: Denoise, x_start: torch.Tensor, i_embs: torch.Tensor, modal_feat: torch.Tensor):
 		"""
@@ -577,20 +532,3 @@ class GaussianDiffusion(nn.Module):
 		total_loss = reconstruction_loss + contrastive_loss * self.config.hyper.e_loss + reg_loss * self.config.train.reg   # (batch,)
 
 		return total_loss
-	
-
-	def MSELoss(self, x_start: torch.Tensor, model_output: torch.Tensor):
-		"""
-		Compute the batch MSE loss between the origin view and denoised view.
-
-		Returns:
-			torch.Tensor: (batch,)
-		"""
-		dim_except_batch = list(range(1, len(x_start.shape)))
-		mse = torch.mean((x_start - model_output) ** 2, dim=dim_except_batch)  # (batch, )
-		return mse
-	
-	def SNR(self, t: torch.Tensor) -> torch.Tensor:
-		"""Compute the Signal-to-Noise Ratio (SNR) at a given timestep."""
-		epsilon = 1e-8
-		return self.alphas_cumprod[t] / (1 - self.alphas_cumprod[t] + epsilon)

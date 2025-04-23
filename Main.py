@@ -197,8 +197,7 @@ class Coach:
 					denoised_batch = self.diffusion_model.backward_steps(
 						denoise_model_dict[m],
 						batch_u_items,
-						self.config.hyper.sampling_steps,
-						self.config.train.sampling_noise
+						self.config.hyper.sampling_steps
 					)
 					for i in range(batch_u_idxs.shape[0]):
 						user_topk = topk_values[i]
