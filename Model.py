@@ -376,29 +376,6 @@ class GaussianDiffusion(nn.Module):
 		# model_mean = self._extract_into_tensor(self.posterior_mean_coef1, timesteps, x_t.shape) * (x_t - self._extract_into_tensor(self.posterior_mean_coef2, timesteps, x_t.shape) * noise)
 		
 		return model_mean, model_log_variance
-
-	def calculate_time_step_weights(self):
-		"""
-		Calculate weights for each time step based on SNR or other metrics.
-		Returns:
-			torch.Tensor: Weights for each time step (steps,).
-		"""
-		# 使用 SNR 作为时间步的重要性指标
-		snr = self.alphas_cumprod / (1 - self.alphas_cumprod + 1e-8)  # SNR
-		weights = torch.sqrt(snr)  # 对 SNR 取平方根，增强对高 SNR 时间步的偏好
-		return weights / weights.sum()  # 归一化为概率分布
-
-	def sample_timesteps(self, batch_size: int):
-		"""
-		Sample time steps for a batch using non-uniform sampling.
-		Args:
-			batch_size (int): Number of samples in the batch.
-		Returns:
-			torch.Tensor: Sampled time steps (batch_size,).
-		"""
-		weights = self.calculate_time_step_weights()  # 获取时间步的采样权重
-		timesteps = torch.multinomial(weights, batch_size, replacement=True)  # 根据权重采样
-		return timesteps
 	
 	def SNR(self, t: torch.Tensor) -> torch.Tensor:
 		"""Compute the Signal-to-Noise Ratio (SNR) at a given timestep."""
@@ -417,8 +394,7 @@ class GaussianDiffusion(nn.Module):
 		"""
 		batch_size = x_start.size(0)
 
-		# 使用非均匀采样策略选择时间步
-		timesteps = self.sample_timesteps(batch_size)
+		timesteps = torch.randint(0, self.steps, (batch_size,)).long().cuda()
 
 		# 添加噪声
 		noise = torch.randn_like(x_start)
@@ -435,7 +411,7 @@ class GaussianDiffusion(nn.Module):
 		reconstruction_loss = reconstruction_loss.mean(dim=-1)  # (batch,)
 		# 防止timesteps-1为负
 		timesteps_minus1 = torch.clamp(timesteps - 1, min=0)
-		weight = self.SNR(timesteps_minus1) - self.SNR(timesteps)  # the \lambda_0 in paper
+		weight = self.SNR(timesteps_minus1) - self.SNR(timesteps)
 		weight = torch.where((timesteps == 0), torch.tensor(1.0, device=weight.device), weight)
 		reconstruction_loss = weight * reconstruction_loss  # (batch,)
 

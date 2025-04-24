@@ -5,9 +5,6 @@ gpu = "0"
 seed = 1818 # Random seed
 denoise_dim = "[1024]" # embedding size for denoise layer input/output 
 d_emb_size = 10 # time embedding size for diffusion step
-
-# Transformation type: 0 = Project Matrix, 1 = Linear, 2 = allrecipes
-trans = 1
 cl_method = 0
 
 # ------------------------------------------------------------
@@ -23,7 +20,6 @@ modal_cl_rate = 0.01 # Weight for contrastive learning
 cross_cl_temp = 0.2
 cross_cl_rate = 0.5
 noise_degree = 1.5
-keepRate = 0.5 # Ratio of edges to keep
 
 noise_scale = 0.5 # Noise scale
 noise_min = 0.0001 # Minimum noise
@@ -34,7 +30,7 @@ sim_weight = 0.5 # Weight of refact_ui_loss
 residual_weight = 0.5  # RIS lambda
 modal_adj_weight = 0.2
 
-sampling_step = 1 # Initial sampling steps for the inverse diffusion process
+sampling_step = 0 # Initial sampling steps for the inverse diffusion process
 
 # ------------------------------------------------------------
 

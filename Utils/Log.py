@@ -21,11 +21,11 @@ class Log():
 
         # Initialize shared file handler if not already done
         if Log._shared_file_handler is None:
-            log_time = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+            log_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             if file_name is None:
                 file_name = "shared"
             Log._shared_file_handler = logging.FileHandler(f"logs/{log_time}_{file_name}.log")
-            file_formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%m/%d %H-%M-%S')
+            file_formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%m/%d %H:%M:%S')
             Log._shared_file_handler.setFormatter(file_formatter)
 
         self.logger.addHandler(Log._shared_file_handler)

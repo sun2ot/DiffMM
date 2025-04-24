@@ -31,23 +31,22 @@ class Coach:
 		result_str = result_str[:-2] + '  ' #? del blank and `:`?
 		return result_str
 	
-	def need_update(self, new: list, old: list) -> tuple[list, int]:
+	def save_max(self, new: list, old: list) -> list:
 		"""Update the maximum indicator. More than half of updates are marked as new best"""
 		re = []
-		tag = 0
 		for i,j in zip(new, old):
 			if i > j:
 				re.append(i)
-				tag = 1
 			else:
 				re.append(j)
-		return re, tag
+		return re
 
 	def run(self):
 		self.prepareModel()
 		main_log.info('Model Initialized ✅')
 
 		recallMax, ndcgMax, precisionMax = 0, 0, 0
+		his_max = [0, 0, 0]
 		bestEpoch = 0  #todo: early stop
 
 		main_log.info('Start training 🚀')
@@ -66,16 +65,18 @@ class Coach:
 				main_log.info(self.makePrint('⏩ Train', epoch, result))
 				if tstFlag:
 					result = self.testEpoch()
-					re_list = [result['Recall'], result['NDCG'], result['Precision']]
-					new_re, tag = self.need_update(re_list, [recallMax, ndcgMax, precisionMax])
-					recallMax, ndcgMax, precisionMax = new_re
-					bestEpoch = epoch if tag else bestEpoch
+					his_max = self.save_max([result['Recall'], result['NDCG'], result['Precision']], his_max)
+					if result['Recall'] > recallMax:
+						recallMax = result['Recall']
+						ndcgMax = result['NDCG']
+						precisionMax = result['Precision']
+						bestEpoch = epoch
 					main_log.info(self.makePrint('🧪 Test', epoch, result))
-				main_log.info(f"💡 Current best: Epoch: {bestEpoch}, Recall: {recallMax:.5f}, NDCG: {ndcgMax:.5f}, Precision: {precisionMax:.5f}")
-			main_log.info(f"Best epoch: {bestEpoch}, Recall: {recallMax:.5f}, NDCG: {ndcgMax:.5f}, Precision: {precisionMax:.5f}")
+				main_log.info(f"💡 Current best: Epoch: {bestEpoch}, Recall: {recallMax:.5f}({his_max[0]:.5f}), NDCG: {ndcgMax:.5f}({his_max[1]:.5f}), Precision: {precisionMax:.5f}({his_max[2]:.5f})")
+			main_log.info(f"Best epoch: {bestEpoch}, Recall: {recallMax:.5f}({his_max[0]:.5f}), NDCG: {ndcgMax:.5f}({his_max[1]:.5f}), Precision: {precisionMax:.5f}({his_max[2]:.5f})")
 		except KeyboardInterrupt:
 			main_log.info('🈲 Training interrupted by user!')
-			main_log.info(f"💡 Current best: Epoch: {bestEpoch}, Recall: {recallMax:.5f}, NDCG: {ndcgMax:.5f}, Precision: {precisionMax:.5f}")
+			main_log.info(f"💡 Current best: Epoch: {bestEpoch}, Recall: {recallMax:.5f}({his_max[0]:.5f}), NDCG: {ndcgMax:.5f}({his_max[1]:.5f}), Precision: {precisionMax:.5f}({his_max[2]:.5f})")
 
 
 	def prepareModel(self):
@@ -249,7 +250,7 @@ class Coach:
 			pos_embs = final_item_embs[pos_items]
 			neg_embs = final_item_embs[neg_items]
 
-			rec_loss = bpr_loss(u_embs, pos_embs, neg_embs) #? bpr_loss: (batch_size, )
+			rec_loss = bpr_loss(u_embs, pos_embs, neg_embs)
 			reg_loss = l2_reg_loss(self.config.train.reg, [self.model.u_embs, self.model.i_embs], self.device)
 			ep_rec_loss += rec_loss.item()
 			ep_reg_loss += reg_loss.item()
@@ -284,15 +285,13 @@ class Coach:
 				u_text_embs, i_text_embs = gcn_output.u_text_embs, gcn_output.i_text_embs
 				u_audio_embs, i_audio_embs = gcn_output.u_audio_embs, gcn_output.i_audio_embs
 				assert u_audio_embs is not None and i_audio_embs is not None
-				if self.config.base.cl_method == 1: #! Only one of the two CL methods was used.
-					#* Modality view as the anchor
+				if self.config.base.cl_method == 1:
 					# pairwise CL: image-text, image-audio, text-audio
 					cross_modal_cl_loss = (InfoNCE(u_image_embs, u_text_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(i_image_embs, i_text_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
 					cross_modal_cl_loss += (InfoNCE(u_image_embs, u_audio_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(i_image_embs, i_audio_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
 					cross_modal_cl_loss += (InfoNCE(u_text_embs, u_audio_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(i_text_embs, i_audio_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
 					cl_loss += cross_modal_cl_loss
 				else:
-					#* Main view as the anchor
 					# only one CL: image-text
 					main_cl_loss = (InfoNCE(final_user_embs, u_image_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(final_item_embs, i_image_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
 					main_cl_loss += (InfoNCE(final_user_embs, u_text_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(final_item_embs, i_text_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
@@ -442,3 +441,29 @@ if __name__ == '__main__':
 	
 	coach = Coach(data_handler, config)
 	coach.run()
+
+	# hyperparameters experiments
+
+	# sampling_step = range(5)
+
+	# for p in sampling_step:
+	# 	config.hyper.sampling_step = p
+	# 	main_log = Log('main', config.data.name)
+	# 	main_log.info('Start')
+	# 	main_log.info(f"================= sampling_step={p} ======================")
+	# 	main_log.info("Configuration Details:")
+	# 	for section, options in config.__dict__.items():
+	# 		if isinstance(options, dict):
+	# 			main_log.info(f"[{section}]")
+	# 			for key, value in options.items():
+	# 				main_log.info(f"  {key}: {value}")
+	# 		else:
+	# 			main_log.info(f"{section}: {options}")
+	# 	data_handler = DataHandler(config)
+
+	# 	main_log.info('Load Data')
+	# 	data_handler.LoadData()
+		
+	# 	coach = Coach(data_handler, config)
+	# 	coach.run()
+	# 	main_log.info("\n\n=========================================\n\n")
