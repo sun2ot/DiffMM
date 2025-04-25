@@ -30,7 +30,7 @@ sim_weight = 0.1 # Weight of refact_ui_loss
 residual_weight = 0.5  # RIS lambda
 modal_adj_weight = 0.2
 
-sampling_step = 1 # Initial sampling steps for the inverse diffusion process
+sampling_step = 0 # Initial sampling steps for the inverse diffusion process
 
 # ------------------------------------------------------------
 

@@ -398,10 +398,7 @@ class GaussianDiffusion(nn.Module):
 
 		# 添加噪声
 		noise = torch.randn_like(x_start)
-		if self.noise_scale != 0:
-			x_t = self.forward_cal_xt(x_start, timesteps, noise)  # forward diffusion
-		else:
-			x_t = x_start
+		x_t = self.forward_cal_xt(x_start, timesteps, noise)  # forward diffusion
 
 		# 去噪过程
 		model_output = model.forward(x_t, timesteps, modal_feat=modal_feat)  # (batch, item)
