@@ -83,15 +83,17 @@ class DataHandler:
 		#* build a sparse bipartite adjacency matrix and normalize it
 		a = csr_matrix((rows, rows))
 		b = csr_matrix((cols, cols))
-		mat = sp.vstack([sp.hstack([a, mat]), sp.hstack([mat.transpose(), b])]).tocoo() # (node_num, node_num), node_num = user_num + item_num
-		mat = (mat != 0) * 1.0 # convert to binary matrix (data is float) #? why do it? u-i interactions are scores?
-		mat = (mat + sp.eye(mat.shape[0])) * 1.0  # set diagonal to 1 (self connection)
-		mat = DataHandler.normalizeAdj(mat)
+		adj_mat = sp.vstack([sp.hstack([a, mat]), sp.hstack([mat.transpose(), b])]).tocoo() # (node_num, node_num), node_num = user_num + item_num
+		adj_mat = (adj_mat != 0) * 1.0 # convert to binary matrix (data is float)
+		adj_mat = (adj_mat + sp.eye(adj_mat.shape[0])) * 1.0  # set diagonal to 1 (self connection)
+		adj_mat = DataHandler.normalizeAdj(adj_mat)
 
 		#* make cuda tensor
-		idxs = torch.from_numpy(np.vstack([mat.row, mat.col]).astype(np.int64))
-		vals = torch.from_numpy(mat.data.astype(np.float32))
-		shape = torch.Size(mat.shape)
+		idxs = torch.from_numpy(np.vstack([adj_mat.row, adj_mat.col]).astype(np.int64))
+		vals = torch.from_numpy(adj_mat.data.astype(np.float32))
+		if adj_mat.shape is None:
+			raise ValueError("adj_mat has no defined shape. Ensure it is a valid sparse matrix.")
+		shape = torch.Size(adj_mat.shape)
 		return torch.sparse_coo_tensor(idxs, vals, shape, device=device)  # torch.Size([node_num, node_num])
 
 	def loadFeatures(self, filename):
@@ -114,7 +116,7 @@ class DataHandler:
 		testMat = self.loadOneFile(self.testfile)
 		self.trainMat = trainMat
 		#args.user, args.item = trainMat.shape  # (user_num, item_num)
-		self.config.data.user_num, self.config.data.item_num = trainMat.shape  # (user_num, item_num)
+		self.config.data.user_num, self.config.data.item_num = trainMat.get_shape()  # (user_num, item_num)
 		self.torchBiAdj = self.makeTorchAdj(trainMat, self.config.data.user_num, self.config.data.item_num, self.device) # (node_num, node_num)
 
 		self.trainData = TrainData(trainMat, self.config)
@@ -127,7 +129,7 @@ class DataHandler:
 		if self.config.data.name == 'tiktok':
 			self.audio_feats, self.config.data.audio_feat_dim = self.loadFeatures(self.audiofile)
 
-		self.diffusionData = DiffusionData(torch.tensor(self.trainMat.A, dtype=torch.float, device=self.device), self.config) # .A == .toarray()
+		self.diffusionData = DiffusionData(torch.tensor(self.trainMat.toarray(), dtype=torch.float, device=self.device), self.config) # .A == .toarray()
 		self.diffusionLoader: dataloader.DataLoader[DiffusionData] = dataloader.DataLoader(self.diffusionData, batch_size=self.config.train.batch, shuffle=True, num_workers=0)
 		# Expose user_pos_items to handler
 		self.user_pos_items = self.trainData.user_pos_items
@@ -154,7 +156,7 @@ class TrainData(torch_dataset):
 		self.dokmat = coomat.todok() #* dictionary of keys (row, col) and values (data)
 		self.negs = np.zeros(len(self.rows)).astype(np.int32) # neg_num == len(self.rows) == interactions (for CL)
 		# Construct positive item list for each user
-		self.user_pos_items = [[] for _ in range(coomat.shape[0])]
+		self.user_pos_items = [[] for _ in range(coomat.get_shape()[0])]
 		for u, i in zip(self.rows, self.cols):
 			self.user_pos_items[u].append(i)
 
@@ -187,9 +189,9 @@ class TestData(torch_dataset):
 			testMat (coo_matrix): (user_num, item_num)
 			trainMat (coo_matrix): (user_num, item_num)
 		"""
-		self.trainMat_csr: csr_matrix = (trainMat.tocsr() != 0) * 1.0 # convert to binary matrix
+		self.trainMat_csr: csr_matrix = sp.csr_matrix(trainMat.tocsr() != 0) * 1.0 # convert to binary matrix
 
-		test_use_its: list = [None] * testMat.shape[0] # users' interactions in test set
+		test_use_its: list = [None] * testMat.get_shape()[0] # users' interactions in test set
 		test_users = set()
 		for i in range(len(testMat.data)):
 			user_idx = testMat.row[i]

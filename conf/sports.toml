@@ -32,6 +32,8 @@ modal_adj_weight = 0.2
 
 sampling_step = 0 # Initial sampling steps for the inverse diffusion process
 
+knn_topk = 10
+
 # ------------------------------------------------------------
 
 [train]
