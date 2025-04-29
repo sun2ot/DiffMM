@@ -13,6 +13,7 @@ import random
 from scipy.sparse import coo_matrix, csr_matrix
 import ast
 import argparse
+from sklearn.metrics.pairwise import cosine_similarity
 
 class Coach:
 	def __init__(self, handler: DataHandler, config: Config):
@@ -57,10 +58,12 @@ class Coach:
 
 				if self.config.train.use_lr_scheduler:
 					self.model_scheduler.step()
-					self.image_scheduler.step()
-					self.text_scheduler.step()
-					if self.config.data.name == 'tiktok':
-						self.audio_scheduler.step()
+					# ----------- Ablation3: KNN -----------
+					# self.image_scheduler.step()
+					# self.text_scheduler.step()
+					# if self.config.data.name == 'tiktok':
+					# 	self.audio_scheduler.step()
+					# ----------- Ablation3: KNN -----------
 				
 				main_log.info(self.makePrint('⏩ Train', epoch, result))
 				if tstFlag:
@@ -111,6 +114,24 @@ class Coach:
 		mat = coo_matrix((edge_list, (u_list, i_list)), shape=(self.config.data.user_num, self.config.data.item_num), dtype=np.float32)
 		sparse_ui_tensor = DataHandler.makeTorchAdj(mat, self.config.data.user_num, self.config.data.item_num, self.device)
 		return sparse_ui_tensor
+	
+	def build_knn_adj(self, user_pos_items, item_feats, topk_per_user):
+		"""Ablation3: KNN to generate modality user-item adjacency matrix"""
+		user_proto = np.array([
+			item_feats[items].mean(axis=0) if len(items) > 0 else np.zeros(item_feats.shape[1])
+			for items in user_pos_items
+		])  # shape=(user_num, feat_dim)
+
+		sim = cosine_similarity(user_proto, item_feats)  # (user_num, item_num)
+
+		u_list, i_list, vals = [], [], []
+		for u in range(sim.shape[0]):
+			# 取topk有序索引
+			idx = np.argsort(-sim[u])[:topk_per_user]
+			u_list.extend([u] * topk_per_user)
+			i_list.extend(idx.tolist())
+			vals.extend([1.0] * topk_per_user)
+		return np.array(u_list), np.array(i_list), np.array(vals)
 
 	def trainEpoch(self):
 		self.handler.trainData.negSampling()
@@ -120,116 +141,151 @@ class Coach:
 		train_steps = len(self.handler.trainData) // self.config.train.batch
 		diffusion_steps = len(self.handler.diffusionData) // self.config.train.batch
 
-		main_log.info('Diffusion model training')
-		for i, batch_data in enumerate(self.handler.diffusionLoader):
-			# batch: list(tensor), batch[0]: (batch_size, item_num), batch[1]: (batch_size, )
-			batch_u_items = batch_data[0]
+		# main_log.info('Diffusion model training')
+		# for i, batch_data in enumerate(self.handler.diffusionLoader):
+		# 	# batch: list(tensor), batch[0]: (batch_size, item_num), batch[1]: (batch_size, )
+		# 	batch_u_items = batch_data[0]
 
-			i_embs = self.model.getItemEmbs()
-			image_feats = self.model.getImageFeats().detach()
-			text_feats = self.model.getTextFeats().detach()
+		# 	i_embs = self.model.getItemEmbs()
+		# 	image_feats = self.model.getImageFeats().detach()
+		# 	text_feats = self.model.getTextFeats().detach()
 
-			batch_image_loss: Tensor = self.diffusion_model.training_losses(self.image_denoise_model, batch_u_items, i_embs, image_feats)
-			loss_image = batch_image_loss.mean()
-			image_diff_loss += loss_image.item()
+		# 	batch_image_loss: Tensor = self.diffusion_model.training_losses(self.image_denoise_model, batch_u_items, i_embs, image_feats)
+		# 	loss_image = batch_image_loss.mean()
+		# 	image_diff_loss += loss_image.item()
 
-			batch_text_loss: Tensor = self.diffusion_model.training_losses(self.text_denoise_model, batch_u_items, i_embs, text_feats)
-			loss_text = batch_text_loss.mean()
-			text_diff_loss += loss_text.item()
+		# 	batch_text_loss: Tensor = self.diffusion_model.training_losses(self.text_denoise_model, batch_u_items, i_embs, text_feats)
+		# 	loss_text = batch_text_loss.mean()
+		# 	text_diff_loss += loss_text.item()
 
-			# optimizer
-			self.image_denoise_opt.zero_grad()
-			self.text_denoise_opt.zero_grad()
+		# 	# optimizer
+		# 	self.image_denoise_opt.zero_grad()
+		# 	self.text_denoise_opt.zero_grad()
 
-			if self.config.data.name == 'tiktok':
-				audio_feats = self.model.getAudioFeats()
-				assert audio_feats is not None
-				audio_feats = audio_feats.detach()
-				self.audio_denoise_opt.zero_grad()
-				batch_audio_loss: Tensor = self.diffusion_model.training_losses(self.audio_denoise_model, batch_u_items, i_embs, audio_feats)
-				loss_audio = batch_audio_loss.mean()
-				audio_diff_loss += loss_audio.item()
+		# 	if self.config.data.name == 'tiktok':
+		# 		audio_feats = self.model.getAudioFeats()
+		# 		assert audio_feats is not None
+		# 		audio_feats = audio_feats.detach()
+		# 		self.audio_denoise_opt.zero_grad()
+		# 		batch_audio_loss: Tensor = self.diffusion_model.training_losses(self.audio_denoise_model, batch_u_items, i_embs, audio_feats)
+		# 		loss_audio = batch_audio_loss.mean()
+		# 		audio_diff_loss += loss_audio.item()
 
-				# Normalize the losses before summing
-				total_loss = loss_image.item() + loss_text.item() + loss_audio.item()
-				batch_diff_loss = (loss_image + loss_text + loss_audio)/total_loss
-				image_diff_loss /= total_loss
-				text_diff_loss /= total_loss
-				audio_diff_loss /= total_loss
-			else:
-				# Normalize the losses before summing
-				total_loss = loss_image.item() + loss_text.item()
-				batch_diff_loss = (loss_image + loss_text)/total_loss
-				image_diff_loss /= total_loss
-				text_diff_loss /= total_loss
+		# 		# Normalize the losses before summing
+		# 		total_loss = loss_image.item() + loss_text.item() + loss_audio.item()
+		# 		batch_diff_loss = (loss_image + loss_text + loss_audio)/total_loss
+		# 		image_diff_loss /= total_loss
+		# 		text_diff_loss /= total_loss
+		# 		audio_diff_loss /= total_loss
+		# 	else:
+		# 		# Normalize the losses before summing
+		# 		total_loss = loss_image.item() + loss_text.item()
+		# 		batch_diff_loss = (loss_image + loss_text)/total_loss
+		# 		image_diff_loss /= total_loss
+		# 		text_diff_loss /= total_loss
 
-			batch_diff_loss.backward()
+		# 	batch_diff_loss.backward()
 
-			self.image_denoise_opt.step()
-			self.text_denoise_opt.step()
-			if self.config.data.name == 'tiktok':
-				self.audio_denoise_opt.step()
+		# 	self.image_denoise_opt.step()
+		# 	self.text_denoise_opt.step()
+		# 	if self.config.data.name == 'tiktok':
+		# 		self.audio_denoise_opt.step()
 
 
-		main_log.info('Re-build multimodal UI matrix')
+		# main_log.info('Re-build multimodal UI matrix')
+		# with torch.no_grad():
+		# 	# every modal's u_list/i_list/edge_list for creating adjacency matrix
+		# 	modality_names = ['image', 'text']
+		# 	if self.config.data.name == 'tiktok':
+		# 		modality_names.append('audio')
+		# 	u_list_dict = {m: [] for m in modality_names}
+		# 	i_list_dict = {m: [] for m in modality_names}
+		# 	edge_list_dict = {m: [] for m in modality_names}
+		# 	denoise_model_dict = {
+		# 		'image': self.image_denoise_model,
+		# 		'text': self.text_denoise_model,
+		# 	}
+		# 	if self.config.data.name == 'tiktok':
+		# 		denoise_model_dict['audio'] = self.audio_denoise_model
+
+		# 	for batch_data in self.handler.diffusionLoader:
+		# 		batch_u_items: Tensor = batch_data[0]
+		# 		batch_u_idxs: np.ndarray = batch_data[1].cpu().numpy()
+
+		# 		user_degrees = self.handler.getUserDegrees()
+		# 		topk_values = user_degrees[batch_u_idxs]
+
+		# 		for m in modality_names:
+		# 			denoised_batch = self.diffusion_model.generate_view(
+		# 				denoise_model_dict[m],
+		# 				batch_u_items,
+		# 				self.config.hyper.sampling_step
+		# 			)
+		# 			for i in range(batch_u_idxs.shape[0]):
+		# 				user_topk = topk_values[i]
+		# 				_, indices = torch.topk(denoised_batch[i], k=user_topk)  # (batch_size, topk)
+		# 				for j in range(indices.shape[0]):
+		# 					u_list_dict[m].append(batch_u_idxs[i])
+		# 					i_list_dict[m].append(int(indices[j]))
+		# 					edge_list_dict[m].append(1.0)
+
+		# 	# make torch sparse adjacency matrix
+		# 	self.image_adj = self.makeTorchAdj(
+		# 		np.array(u_list_dict['image']),
+		# 		np.array(i_list_dict['image']),
+		# 		np.array(edge_list_dict['image'])
+		# 	)
+		# 	# self.image_adj = self.model.edgeDropper(self.image_adj)
+
+		# 	self.text_adj = self.makeTorchAdj(
+		# 		np.array(u_list_dict['text']),
+		# 		np.array(i_list_dict['text']),
+		# 		np.array(edge_list_dict['text'])
+		# 	)
+		# 	# self.text_adj = self.model.edgeDropper(self.text_adj)
+
+		# 	if self.config.data.name == 'tiktok':
+		# 		self.audio_adj = self.makeTorchAdj(
+		# 			np.array(u_list_dict['audio']),
+		# 			np.array(i_list_dict['audio']),
+		# 			np.array(edge_list_dict['audio'])
+		# 		)
+		# 		# self.audio_adj = self.model.edgeDropper(self.audio_adj)
+
+		# ------------------ Ablation3 ------------------
+		main_log.info('Re-build multimodal UI matrix (KNN)')
 		with torch.no_grad():
-			# every modal's u_list/i_list/edge_list for creating adjacency matrix
-			modality_names = ['image', 'text']
-			if self.config.data.name == 'tiktok':
-				modality_names.append('audio')
-			u_list_dict = {m: [] for m in modality_names}
-			i_list_dict = {m: [] for m in modality_names}
-			edge_list_dict = {m: [] for m in modality_names}
-			denoise_model_dict = {
-				'image': self.image_denoise_model,
-				'text': self.text_denoise_model,
-			}
-			if self.config.data.name == 'tiktok':
-				denoise_model_dict['audio'] = self.audio_denoise_model
-
-			for batch_data in self.handler.diffusionLoader:
-				batch_u_items: Tensor = batch_data[0]
-				batch_u_idxs: np.ndarray = batch_data[1].cpu().numpy()
-
-				user_degrees = self.handler.getUserDegrees()
-				topk_values = user_degrees[batch_u_idxs]
-
-				for m in modality_names:
-					denoised_batch = self.diffusion_model.generate_view(
-						denoise_model_dict[m],
-						batch_u_items,
-						self.config.hyper.sampling_step
-					)
-					for i in range(batch_u_idxs.shape[0]):
-						user_topk = topk_values[i]
-						_, indices = torch.topk(denoised_batch[i], k=user_topk)  # (batch_size, topk)
-						for j in range(indices.shape[0]):
-							u_list_dict[m].append(batch_u_idxs[i])
-							i_list_dict[m].append(int(indices[j]))
-							edge_list_dict[m].append(1.0)
-
-			# make torch sparse adjacency matrix
+			# image
+			u_i, i_i, v_i = self.build_knn_adj(
+				self.handler.trainData.user_pos_items,                # list of train items per user
+				self.handler.image_feats.detach().cpu().numpy(),      # item_num × d_img
+				self.config.hyper.knn_topk                            # 你在 config 里加个 topk 参数
+			)
 			self.image_adj = self.makeTorchAdj(
-				np.array(u_list_dict['image']),
-				np.array(i_list_dict['image']),
-				np.array(edge_list_dict['image'])
+				np.array(u_i), np.array(i_i), np.array(v_i)
 			)
-			# self.image_adj = self.model.edgeDropper(self.image_adj)
 
+			# text
+			u_t, i_t, v_t = self.build_knn_adj(
+				self.handler.trainData.user_pos_items,
+				self.handler.text_feats.detach().cpu().numpy(),
+				self.config.hyper.knn_topk
+			)
 			self.text_adj = self.makeTorchAdj(
-				np.array(u_list_dict['text']),
-				np.array(i_list_dict['text']),
-				np.array(edge_list_dict['text'])
+				np.array(u_t), np.array(i_t), np.array(v_t)
 			)
-			# self.text_adj = self.model.edgeDropper(self.text_adj)
-
+			
+			# audio
 			if self.config.data.name == 'tiktok':
-				self.audio_adj = self.makeTorchAdj(
-					np.array(u_list_dict['audio']),
-					np.array(i_list_dict['audio']),
-					np.array(edge_list_dict['audio'])
+				u_a, i_a, v_a = self.build_knn_adj(
+					self.handler.trainData.user_pos_items,
+					self.handler.audio_feats.detach().cpu().numpy(),
+					self.config.hyper.knn_topk
 				)
-				# self.audio_adj = self.model.edgeDropper(self.audio_adj)
+				self.audio_adj = self.makeTorchAdj(
+					np.array(u_a), np.array(i_a), np.array(v_a)
+				)
+		# ------------------ Ablation3 ------------------
 
 
 		main_log.info('Joint training 🤝')
@@ -277,10 +333,11 @@ class Coach:
 			cross_cl_loss = (InfoNCE(cl1_user_embs, cl2_user_embs, users, self.config.hyper.cross_cl_temp) + InfoNCE(cl1_item_embs, cl2_item_embs, pos_items, self.config.hyper.cross_cl_temp)) * self.config.hyper.cross_cl_rate
 			cl_loss = cross_cl_loss
 
+			# Ablation1
+			# cl_loss = 0
+
+			# ----------- Ablation2 -----------
 			if self.config.data.name == 'tiktok':
-				# result = self.model.gcn_MM_CL(self.handler.torchBiAdj, self.image_adj, self.text_adj, self.audio_adj)
-				# assert len(result) == 6
-				# u_image_embs, i_image_embs, u_text_embs, i_text_embs, u_audio_embs, i_audio_embs = result
 				u_image_embs, i_image_embs = gcn_output.u_image_embs, gcn_output.i_image_embs
 				u_text_embs, i_text_embs = gcn_output.u_text_embs, gcn_output.i_text_embs
 				u_audio_embs, i_audio_embs = gcn_output.u_audio_embs, gcn_output.i_audio_embs
@@ -298,9 +355,6 @@ class Coach:
 					main_cl_loss += (InfoNCE(final_user_embs, u_audio_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(final_item_embs, i_audio_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
 					cl_loss += main_cl_loss
 			else:
-				# result = self.model.gcn_MM_CL(self.handler.torchBiAdj, self.image_adj, self.text_adj)
-				# assert len(result) == 4
-				# u_image_embs, i_image_embs, u_text_embs, i_text_embs = result
 				u_image_embs, i_image_embs = gcn_output.u_image_embs, gcn_output.i_image_embs
 				u_text_embs, i_text_embs = gcn_output.u_text_embs, gcn_output.i_text_embs
 				if self.config.base.cl_method == 1: #! Only one of the two CL methods was used.
@@ -311,6 +365,7 @@ class Coach:
 					main_cl_loss = (InfoNCE(final_user_embs, u_image_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(final_item_embs, i_image_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
 					main_cl_loss += (InfoNCE(final_user_embs, u_text_embs, users, self.config.hyper.modal_cl_temp) + InfoNCE(final_item_embs, i_text_embs, pos_items, self.config.hyper.modal_cl_temp)) * self.config.hyper.modal_cl_rate
 					cl_loss += main_cl_loss
+			# ----------- Ablation2 -----------
 
 			ep_cl_loss += cl_loss.item()
 
@@ -338,7 +393,6 @@ class Coach:
 		epRecall, epNdcg, epPrecision = [0] * 3
 		i = 0
 		data_length = len(testData)
-		test_steps = len(testData) // self.config.train.test_batch
 
 		if self.config.data.name == 'tiktok':
 			gcn_output = self.model.gcn_MM(self.handler.torchBiAdj, self.image_adj, self.text_adj, self.audio_adj)
@@ -359,7 +413,6 @@ class Coach:
 			epRecall += recall
 			epNdcg += ndcg
 			epPrecision += precision
-			# olog(f"Step {i}/{test_steps}: recall = {recall:.2f}, ndcg = {ndcg:.2f} , precision = {precision:.2f}")
 		ret = dict()
 		ret['Recall'] = epRecall / data_length
 		ret['NDCG'] = epNdcg / data_length
@@ -396,19 +449,12 @@ class Coach:
 		return allRecall, allNdcg, allPrecision
 
 def seed_it(seed):
-	"""
-	Set the random seed for all
-	"""
 	random.seed(seed)
 	os.environ["PYTHONSEED"] = str(seed)
 	np.random.seed(seed)
 	torch.manual_seed(seed)
-	torch.cuda.manual_seed(seed)  # if device is not cuda, this is ignored
+	torch.cuda.manual_seed(seed)
 	torch.cuda.manual_seed_all(seed)
-	#? will deterministic conflict with benchmark?
-	# torch.backends.cudnn.deterministic = True  # force cudnn to be deterministic
-	# torch.backends.cudnn.benchmark = True  # enable cudnn auto-tuner to find the optimal set of algorithms for the hardware
-	# torch.backends.cudnn.enabled = True
 	
 
 if __name__ == '__main__':

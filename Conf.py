@@ -45,6 +45,8 @@ class HyperConfig:
 
     sampling_step: int = 0
 
+    knn_topk: int = 10
+
 @dataclass
 class TrainConfig:
     lr: float = 0.001

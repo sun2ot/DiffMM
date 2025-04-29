@@ -1,8 +1,9 @@
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-# from numba import jit
 import numpy as np
+from numba import njit, prange
+
 
 def innerProduct(user_embs, item_embs) -> Tensor:
 	return torch.sum(user_embs * item_embs, dim=-1)
@@ -95,3 +96,65 @@ def bpr_loss(user_emb, pos_item_emb, neg_item_embs):
     loss = -torch.log(10e-6 + torch.sigmoid(pos_score - neg_score))  # (batch_size)
     # 返回损失的均值
     return torch.mean(loss)
+
+
+@njit
+def l2_norm(x):
+    s = 0.0
+    for i in range(x.shape[0]):
+        s += x[i] * x[i]
+    return np.sqrt(s)
+
+@njit(parallel=True)
+def compute_user_protos(user_pos_items, item_feats, user_proto):
+    """
+    user_pos_items: 2D object array/list, 每行是该用户历史交互的 item 索引 array
+    item_feats: (item_num, feat_dim) float32
+    user_proto: (user_num, feat_dim) pre分配好的 output
+    """
+    U, D = user_proto.shape
+    for u in prange(U):
+        items = user_pos_items[u]
+        if items.size == 0:
+            continue
+        # sum pooling
+        tmp = np.zeros(D, dtype=np.float32)
+        for idx in items:
+            for d in range(D):
+                tmp[d] += item_feats[idx, d]
+        # 平均
+        for d in range(D):
+            user_proto[u, d] = tmp[d] / items.size
+
+@njit(parallel=True)
+def build_knn_adj_numba(user_pos_items, item_feats, topk, u_list, i_list, vals):
+    """
+    输出边表 (u_list, i_list, vals)，长度 = user_num * topk
+    """
+    U, D = user_pos_items.shape[0], item_feats.shape[1]
+    N = item_feats.shape[0]
+    # 1. 先算每个用户的原型
+    user_proto = np.zeros((U, D), dtype=np.float32)
+    compute_user_protos(user_pos_items, item_feats, user_proto)
+
+    # 2. 逐用户并行算相似度 & top-k
+    for u in prange(U):
+        # 先算 user_proto[u] norm
+        un = l2_norm(user_proto[u])
+        # 逐 item 算余弦（dot 除以 norm）
+        sim = np.empty(N, dtype=np.float32)
+        for j in range(N):
+            dot = 0.0
+            for d in range(D):
+                dot += user_proto[u, d] * item_feats[j, d]
+            dn = l2_norm(item_feats[j])
+            sim[j] = dot / (un * dn + 1e-8)
+        # 简单排序取 topk
+        idx_sorted = np.argsort(sim)
+        base = u * topk
+        for k in range(topk):
+            # 取最大的 topk
+            ii = idx_sorted[N - 1 - k]
+            u_list[base + k] = u
+            i_list[base + k] = ii
+            vals[base + k]   = 1.0

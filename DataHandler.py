@@ -129,6 +129,8 @@ class DataHandler:
 
 		self.diffusionData = DiffusionData(torch.tensor(self.trainMat.A, dtype=torch.float, device=self.device), self.config) # .A == .toarray()
 		self.diffusionLoader: dataloader.DataLoader[DiffusionData] = dataloader.DataLoader(self.diffusionData, batch_size=self.config.train.batch, shuffle=True, num_workers=0)
+		# Expose user_pos_items to handler
+		self.user_pos_items = self.trainData.user_pos_items
 
 	def getUserDegrees(self) -> np.ndarray:
 		"""
@@ -151,6 +153,10 @@ class TrainData(torch_dataset):
 		self.cols = coomat.col
 		self.dokmat = coomat.todok() #* dictionary of keys (row, col) and values (data)
 		self.negs = np.zeros(len(self.rows)).astype(np.int32) # neg_num == len(self.rows) == interactions (for CL)
+		# Construct positive item list for each user
+		self.user_pos_items = [[] for _ in range(coomat.shape[0])]
+		for u, i in zip(self.rows, self.cols):
+			self.user_pos_items[u].append(i)
 
 	def negSampling(self):
 		"""select negative samples for each interaction"""
