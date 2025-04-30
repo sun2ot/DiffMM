@@ -15,16 +15,12 @@ class DataHandler:
 		self.config = config
 		self.device = torch.device(f"cuda:{self.config.base.gpu}" if torch.cuda.is_available() else "cpu")
 		# path to datasets
-		if self.config.data.name == 'baby':
-			predir = './Datasets/baby/'
+		if self.config.data.name == 'tiktok':
+			predir = './Datasets/tiktok/'
 		elif self.config.data.name == 'sports':
 			predir = './Datasets/sports/'
-		elif self.config.data.name == 'tiktok':
-			predir = './Datasets/tiktok/'
 		elif self.config.data.name == 'yelp':
-			predir = './mydatasets/yelp/'
-		elif self.config.data.name == 'ifashion':
-			predir = './mydatasets/ifashion/'
+			predir = './Datasets/yelp/'
 		else:
 			raise ValueError(f"Unknown dataset: {self.config.data.name}")
 

@@ -87,7 +87,7 @@ class Model(nn.Module):
 		weight: nn.Parameter = self.softmax(self.modal_weight) # type: ignore
 
 		image_adj_embs = torch.cat([self.u_embs, F.normalize(image_feats)])  # (node, dim)
-		image_adj_embs = torch.sparse.mm(image_adj, image_adj_embs)  # (node, dim) #! 这个就是gcn_MM_CL的返回值
+		image_adj_embs = torch.sparse.mm(image_adj, image_adj_embs)  # (node, dim)
 
 		text_adj_embs = torch.cat([self.u_embs, F.normalize(text_feats)])
 		text_adj_embs = torch.sparse.mm(text_adj, text_adj_embs)
@@ -403,7 +403,7 @@ class GaussianDiffusion(nn.Module):
 		# 去噪过程
 		model_output = model.forward(x_t, timesteps, modal_feat=modal_feat)  # (batch, item)
 
-		# 1. 重构损失 (Reconstruction Loss)
+		# 重构损失 (Reconstruction Loss)
 		reconstruction_loss = F.mse_loss(model_output, x_start, reduction='none')  # (batch, item)
 		reconstruction_loss = reconstruction_loss.mean(dim=-1)  # (batch,)
 		# 防止timesteps-1为负
@@ -412,16 +412,17 @@ class GaussianDiffusion(nn.Module):
 		weight = torch.where((timesteps == 0), torch.tensor(1.0, device=weight.device), weight)
 		reconstruction_loss = weight * reconstruction_loss  # (batch,)
 
-		# 2. 对比损失 (Contrastive Loss)
+		# 偏好相似度损失 (Preference Similarity Loss)
 		user_modal_embs = torch.sparse.mm(model_output, modal_feat)  # (batch, latdim)
 		user_id_embs = torch.sparse.mm(x_start, i_embs)  # (batch, latdim)
 		sim_loss = 1 - F.cosine_similarity(user_modal_embs, user_id_embs, dim=-1)  # (batch,)
 
-		# 3. 正则化损失 (Regularization Loss)
+		# 正则化损失 (Regularization Loss)
 		reg_loss = l2_reg_loss(self.config.train.reg, [i_embs], self.device)  # 标量
 		reg_loss = reg_loss.expand(batch_size)  # (batch,)
 
-		# 4. 动态权重平衡
+		# 动态权重平衡
 		total_loss = reconstruction_loss + sim_loss * self.config.hyper.sim_weight + reg_loss * self.config.train.reg   # (batch,)
+		# total_loss = reconstruction_loss + reg_loss * self.config.train.reg   # (batch,)
 
 		return total_loss

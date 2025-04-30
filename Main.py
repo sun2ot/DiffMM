@@ -468,7 +468,6 @@ if __name__ == '__main__':
 		exit(1)
 
 	seed_it(config.base.seed)
-
 	main_log = Log('main', config.data.name)
 	main_log.info('Start')
 	main_log.info("Configuration Details:")
@@ -487,15 +486,39 @@ if __name__ == '__main__':
 	coach = Coach(data_handler, config)
 	coach.run()
 
-	# hyperparameters experiments
 
+
+	# ---------------- hyperparameters experiments ------------------
 	# sampling_step = range(5)
 
 	# for p in sampling_step:
 	# 	config.hyper.sampling_step = p
-	# 	main_log = Log('main', config.data.name)
-	# 	main_log.info('Start')
 	# 	main_log.info(f"================= sampling_step={p} ======================")
+	# 	main_log.info("Configuration Details:")
+	# 	for section, options in config.__dict__.items():
+	# 		if isinstance(options, dict):
+	# 			main_log.info(f"[{section}]")
+	# 			for key, value in options.items():
+	# 				main_log.info(f"  {key}: {value}")
+	# 		else:
+	# 			main_log.info(f"{section}: {options}")
+	# 	data_handler = DataHandler(config)
+
+	# 	main_log.info('Load Data')
+	# 	data_handler.LoadData()
+		
+	# 	coach = Coach(data_handler, config)
+	# 	coach.run()
+	# 	main_log.info("\n\n=========================================\n\n")
+
+
+
+	# ---------------- ablation experiments ------------------
+	# conf_path = ["conf/tiktok.toml", "conf/yelp.toml", "conf/sports.toml"]
+
+	# for p in conf_path:
+	# 	config = load_config(p)
+	# 	main_log.info(f"================= pref ablation: conf={p} ======================")
 	# 	main_log.info("Configuration Details:")
 	# 	for section, options in config.__dict__.items():
 	# 		if isinstance(options, dict):
